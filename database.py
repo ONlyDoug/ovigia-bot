@@ -2,7 +2,6 @@ import asyncpg
 import asyncio
 
 class DatabaseManager:
-    # MUDANÇA: Recebe componentes, não a string 'dsn'
     def __init__(self, user, password, host, port, db_name, min_conn=2, max_conn=10):
         self._user = user
         self._password = password
@@ -17,7 +16,6 @@ class DatabaseManager:
     async def connect(self):
         """Inicializa o pool de conexões com asyncpg."""
         try:
-            # MUDANÇA: Passa os argumentos separados, evitando o bug do parse
             self._pool = await asyncpg.create_pool(
                 user=self._user,
                 password=self._password,
@@ -25,7 +23,9 @@ class DatabaseManager:
                 port=self._port,
                 database=self._db_name,
                 min_size=self._min_conn,
-                max_size=self._max_conn
+                max_size=self._max_conn,
+                # --- CORREÇÃO (Dica do Log) ---
+                statement_cache_size=0 # Desativa o cache que causa o erro no pgbouncer
             )
             print("Pool de conexões (asyncpg) inicializado com sucesso.")
         except Exception as e:
@@ -41,7 +41,6 @@ class DatabaseManager:
     async def execute_query(self, query, *params, fetch=None):
         """Executa uma query de forma assíncrona."""
         if not self._pool:
-            # Esta é uma salvaguarda, mas o bot.py deve ligar primeiro
             print("Pool de conexões não inicializado. A tentar conectar...")
             await self.connect() 
             
