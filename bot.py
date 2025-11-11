@@ -1,10 +1,10 @@
 import discord
 from discord.ext import commands
-import config # O nosso novo config.py
+import config # O nosso config.py atualizado
 import albion_api
 import asyncio
 import os
-from database import DatabaseManager # A nossa nova classe de DB
+from database import DatabaseManager
 
 # --- Configuração dos Intents ---
 intents = discord.Intents.default()
@@ -15,8 +15,14 @@ class VigiaBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
         
-        # Isto agora está correto, pois o __init__ não faz nada assíncrono
-        self.db_manager = DatabaseManager(dsn=config.DATABASE_URL)
+        # MUDANÇA: Passa os componentes separados do config
+        self.db_manager = DatabaseManager(
+            user=config.DB_USER,
+            password=config.DB_PASSWORD,
+            host=config.DB_HOST,
+            port=config.DB_PORT,
+            db_name=config.DB_NAME
+        )
         self.albion_client = albion_api.AlbionAPI()
         
     async def setup_hook(self):
@@ -27,7 +33,7 @@ class VigiaBot(commands.Bot):
         # 1. Ligar à Base de Dados
         await self.db_manager.connect()
         
-        # 2. Ligar ao Albion API (MUDANÇA ADICIONADA)
+        # 2. Ligar ao Albion API
         await self.albion_client.connect()
 
         # 3. Carregar Admin Cog PRIMEIRO para criar as tabelas

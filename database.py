@@ -2,25 +2,32 @@ import asyncpg
 import asyncio
 
 class DatabaseManager:
-    def __init__(self, dsn: str, min_conn: int = 2, max_conn: int = 10):
-        self._dsn = dsn
-        # Guarda as variáveis na instância
+    # MUDANÇA: Recebe componentes, não a string 'dsn'
+    def __init__(self, user, password, host, port, db_name, min_conn=2, max_conn=10):
+        self._user = user
+        self._password = password
+        self._host = host
+        self._port = port
+        self._db_name = db_name
         self._min_conn = min_conn
         self._max_conn = max_conn
-        print("DatabaseManager inicializado para DSN.")
+        self._pool = None
+        print("DatabaseManager inicializado (com componentes separados).")
 
     async def connect(self):
         """Inicializa o pool de conexões com asyncpg."""
         try:
+            # MUDANÇA: Passa os argumentos separados, evitando o bug do parse
             self._pool = await asyncpg.create_pool(
-                dsn=self._dsn,
-                # --- CORREÇÃO AQUI ---
-                # Usamos as variáveis guardadas (self._)
+                user=self._user,
+                password=self._password,
+                host=self._host,
+                port=self._port,
+                database=self._db_name,
                 min_size=self._min_conn,
                 max_size=self._max_conn
-                # --- FIM DA CORREÇÃO ---
             )
-            print("Pool de conexões com a base de dados (asyncpg) inicializado com sucesso.")
+            print("Pool de conexões (asyncpg) inicializado com sucesso.")
         except Exception as e:
             print(f"ERRO CRÍTICO ao inicializar o pool de conexões: {e}")
             raise
@@ -34,8 +41,8 @@ class DatabaseManager:
     async def execute_query(self, query, *params, fetch=None):
         """Executa uma query de forma assíncrona."""
         if not self._pool:
+            # Esta é uma salvaguarda, mas o bot.py deve ligar primeiro
             print("Pool de conexões não inicializado. A tentar conectar...")
-            # Esta linha é uma salvaguarda, mas o bot.py deve chamar connect() primeiro.
             await self.connect() 
             
         async with self._pool.acquire() as conn:
