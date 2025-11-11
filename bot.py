@@ -15,7 +15,7 @@ class VigiaBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
         
-        # Inicializa os nossos clientes
+        # Isto agora está correto, pois o __init__ não faz nada assíncrono
         self.db_manager = DatabaseManager(dsn=config.DATABASE_URL)
         self.albion_client = albion_api.AlbionAPI()
         
@@ -23,10 +23,14 @@ class VigiaBot(commands.Bot):
         """Este 'hook' corre antes do bot ligar."""
         
         print("A executar setup_hook...")
+        
         # 1. Ligar à Base de Dados
         await self.db_manager.connect()
+        
+        # 2. Ligar ao Albion API (MUDANÇA ADICIONADA)
+        await self.albion_client.connect()
 
-        # 2. Carregar Admin Cog PRIMEIRO para criar as tabelas
+        # 3. Carregar Admin Cog PRIMEIRO para criar as tabelas
         try:
             await self.load_extension('cogs.admin_cog')
             admin_cog = self.get_cog('AdminCog')
@@ -39,7 +43,7 @@ class VigiaBot(commands.Bot):
             print(f"ERRO CRÍTICO ao carregar/inicializar o AdminCog: {e}")
             return
 
-        # 3. Carregar os outros Cogs
+        # 4. Carregar os outros Cogs
         cogs_to_load = ['cogs.recrutamento_cog', 'cogs.sync_cog']
         for cog_name in cogs_to_load:
             try:
@@ -48,7 +52,7 @@ class VigiaBot(commands.Bot):
             except Exception as e:
                 print(f"ERRO ao carregar o cog '{cog_name}': {e}")
 
-        # 4. Sincronizar Comandos de Barra
+        # 5. Sincronizar Comandos de Barra
         await self.tree.sync()
         print("Setup_hook concluído.")
 
