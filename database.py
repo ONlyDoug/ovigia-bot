@@ -4,16 +4,21 @@ import asyncio
 class DatabaseManager:
     def __init__(self, dsn: str, min_conn: int = 2, max_conn: int = 10):
         self._dsn = dsn
-        self._pool = None
-        print(f"DatabaseManager inicializado para DSN.")
+        # Guarda as variáveis na instância
+        self._min_conn = min_conn
+        self._max_conn = max_conn
+        print("DatabaseManager inicializado para DSN.")
 
     async def connect(self):
         """Inicializa o pool de conexões com asyncpg."""
         try:
             self._pool = await asyncpg.create_pool(
                 dsn=self._dsn,
-                min_size=min_conn,
-                max_size=max_conn
+                # --- CORREÇÃO AQUI ---
+                # Usamos as variáveis guardadas (self._)
+                min_size=self._min_conn,
+                max_size=self._max_conn
+                # --- FIM DA CORREÇÃO ---
             )
             print("Pool de conexões com a base de dados (asyncpg) inicializado com sucesso.")
         except Exception as e:
@@ -30,7 +35,8 @@ class DatabaseManager:
         """Executa uma query de forma assíncrona."""
         if not self._pool:
             print("Pool de conexões não inicializado. A tentar conectar...")
-            await self.connect()
+            # Esta linha é uma salvaguarda, mas o bot.py deve chamar connect() primeiro.
+            await self.connect() 
             
         async with self._pool.acquire() as conn:
             if fetch == "one":
