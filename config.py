@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-import urllib.parse # Importa a biblioteca para fazer o parse de URLs
+import re # Usaremos a biblioteca de Expressões Regulares (RegEx)
 
 # Carrega o .env para testes locais
 load_dotenv()
@@ -12,20 +12,32 @@ if not TOKEN or not DATABASE_URL:
     print("ERRO CRÍTICO: DISCORD_TOKEN ou DATABASE_URL não definidos!")
     exit()
 
-# --- NOVA LÓGICA DE PARSE ---
+# --- NOVA LÓGICA DE PARSE (Manual, sem validação) ---
 try:
-    # Desmonta a URL da base de dados
-    url = urllib.parse.urlparse(DATABASE_URL)
+    # Formato esperado: postgresql://utilizador:senha@host:porta/base_de_dados
+    # Usamos RegEx para extrair os grupos de forma segura
     
-    DB_USER = url.username
-    DB_PASSWORD = url.password
-    DB_HOST = url.hostname
-    DB_PORT = url.port
-    DB_NAME = url.path[1:] # Remove o '/' inicial do caminho
+    # Esta expressão captura os 5 grupos que precisamos
+    # Grupo 1: utilizador (Tudo depois de // e antes de :)
+    # Grupo 2: senha (Tudo depois de : e antes de @)
+    # Grupo 3: host (Tudo depois de @ e antes de :)
+    # Grupo 4: porta (Os números depois de : e antes de /)
+    # Grupo 5: base_de_dados (Tudo depois de / até o fim)
+    match = re.search(r"postgresql://(.*?):(.*?)@(.*?):(\d+)/(.*)", DATABASE_URL)
     
-    # Verifica se conseguimos desmontar tudo
+    if not match:
+        raise ValueError("Formato da URL do banco de dados não corresponde ao esperado.")
+
+    groups = match.groups()
+    
+    DB_USER = groups[0]
+    DB_PASSWORD = groups[1]
+    DB_HOST = groups[2]     # Ex: 'aws-1-us-east-1.pooler.supabase.com'
+    DB_PORT = int(groups[3])  # Ex: 6543
+    DB_NAME = groups[4]     # Ex: 'postgres'
+    
     if not all([DB_USER, DB_PASSWORD, DB_HOST, DB_PORT, DB_NAME]):
-        raise ValueError("A URL da base de dados está incompleta ou mal formatada.")
+        raise ValueError("A URL da base de dados está incompleta.")
         
 except Exception as e:
     print(f"ERRO CRÍTICO: Falha ao 'desmontar' o DATABASE_URL.")
