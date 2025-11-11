@@ -1,10 +1,12 @@
 import discord
 from discord.ext import commands
 from discord import app_commands
-import logging # Usar logging em vez de print
+import logging
+import asyncpg # <- IMPORTAÇÃO CRÍTICA ADICIONADA
 
 # --- Função de Verificação de Admin ---
 async def check_admin(interaction: discord.Interaction):
+    # Acede ao db_manager através do cliente (self.bot)
     config_data = await interaction.client.db_manager.execute_query(
         "SELECT admin_role_id FROM server_config WHERE server_id = $1",
         interaction.guild.id, fetch="one"
@@ -56,7 +58,6 @@ class AdminCog(commands.Cog):
             await self.bot.db_manager.execute_query("DROP TABLE IF EXISTS pending_users;")
 
             # Adiciona a Foreign Key (com verificação)
-            # (Adicionado de volta do seu Arauto Bot - boa prática!)
             try:
                 await self.bot.db_manager.execute_query("""
                     ALTER TABLE guild_members
@@ -66,9 +67,9 @@ class AdminCog(commands.Cog):
                     ON DELETE CASCADE;
                 """)
             except asyncpg.exceptions.DuplicateObjectError:
+                # Esta é a linha que precisava do 'import asyncpg'
                 pass # A constraint já existe, tudo bem.
             
-            # --- MENSAGEM DE SUCESSO ADICIONADA ---
             print("Base de dados (O Vigia Bot) verificada e pronta.")
             
         except Exception as e:
@@ -84,7 +85,6 @@ class AdminCog(commands.Cog):
     @app_commands.describe(cargo="O cargo que terá permissões de admin do bot.")
     async def setup_admin_role(self, interaction: discord.Interaction, cargo: discord.Role):
         await self.bot.db_manager.execute_query(
-            # "Upsert" - Insere ou atualiza se já existir
             "INSERT INTO server_config (server_id, admin_role_id) VALUES ($1, $2) "
             "ON CONFLICT (server_id) DO UPDATE SET admin_role_id = $2",
             interaction.guild.id, cargo.id
@@ -140,10 +140,8 @@ class AdminCog(commands.Cog):
             canal_comandos = await guild.create_text_channel("🔒-bot-comandos", category=cat_privada)
             canal_logs = await guild.create_text_channel("📢-bot-logs", category=cat_privada)
             
-            # Ajustar permissão do canal de recrutamento
             await canal_recrutamento.set_permissions(guild.default_role, send_messages=True, read_messages=True, view_channel=True)
             
-            # Salvar na Base de Dados
             await self.bot.db_manager.execute_query(
                 "UPDATE server_config SET canal_registo_id = $1, canal_logs_id = $2 WHERE server_id = $3",
                 canal_recrutamento.id, canal_logs.id, guild.id
