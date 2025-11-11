@@ -1,16 +1,17 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
+import database as db
 import random
 import string
 import logging
 
 # --- Função de Log (Auxiliar) ---
 async def log_to_channel(bot, guild_id, message, color=None):
-    """Envia uma mensagem de log para o canal de logs configurado."""
     try:
         config_data = await bot.db_manager.execute_query(
-            "SELECT canal_logs_id FROM server_config WHERE server_id = $1", guild_id, fetch="one"
+            "SELECT canal_logs_id FROM server_config WHERE server_id = $1",
+            guild_id, fetch="one"
         )
         if not config_data or not config_data.get('canal_logs_id'):
             print(f"Log falhou: Canal de logs não configurado para {guild_id}")
@@ -34,37 +35,35 @@ def gerar_codigo(tamanho=6):
 class RecrutamentoCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.verificacao_automatica.start() # Inicia o loop de registo
+        self.verificacao_automatica.start()
 
-    # --- Comando /registrar (com filtro) ---
+    # --- Comando /registrar (ATUALIZADO COM FILTRO) ---
     @app_commands.command(name="registrar", description="Inicia o seu processo de registo na guilda.")
     @app_commands.describe(nick="O seu nick exato no Albion Online.")
     async def registrar(self, interaction: discord.Interaction, nick: str):
         config_data = await self.bot.db_manager.execute_query(
-            "SELECT * FROM server_config WHERE server_id = $1", interaction.guild.id, fetch="one"
+            "SELECT * FROM server_config WHERE server_id = $1",
+            interaction.guild.id, fetch="one"
         )
         
-        # 1. Verifica se o setup está completo
         if not all([
             config_data, config_data.get('canal_registo_id'),
             config_data.get('guild_name'), config_data.get('role_id'),
-            config_data.get('fame_total') is not None, # Permite 0
-            config_data.get('fame_pvp') is not None  # Permite 0
+            config_data.get('fame_total') is not None,
+            config_data.get('fame_pvp') is not None
         ]):
             return await interaction.response.send_message(
                 "O bot ainda não foi totalmente configurado por um admin.", ephemeral=True
             )
         
-        # 2. Verifica se está no canal certo
         if interaction.channel.id != config_data['canal_registo_id']:
             canal_correto = interaction.guild.get_channel(config_data['canal_registo_id'])
             return await interaction.response.send_message(
                 f"Por favor, use este comando no canal {canal_correto.mention}.", ephemeral=True
             )
 
-        await interaction.response.defer(ephemeral=True) # Pensa...
+        await interaction.response.defer(ephemeral=True)
         
-        # 3. API Check (Filtro)
         player_info = await self.bot.albion_client.get_player_info(
             await self.bot.albion_client.search_player(nick)
         )
@@ -76,32 +75,38 @@ class RecrutamentoCog(commands.Cog):
             )
             return
 
-        # 4. Verificação de Requisitos
-        total_fame = player_info.get('TotalFame', 0)
-        kill_fame = player_info.get('KillFame', 0)
-        
-        req_total_fame = config_data.get('fame_total', 0)
-        req_kill_fame = config_data.get('fame_pvp', 0)
+        # --- MUDANÇA IMPORTANTE AQUI ---
+        # Verificamos se o jogador já está na guilda
+        player_guild_name = player_info.get('GuildName', '')
+        is_already_member = player_guild_name.lower() == config_data.get('guild_name', '').lower()
 
-        if total_fame < req_total_fame or kill_fame < req_kill_fame:
-            # Falhou no filtro
-            log_msg = (
-                f"❌ **Filtro Falhou**\n"
-                f"Utilizador: {interaction.user.mention} (`{nick}`)\n"
-                f"Fama Total: `{total_fame:,}` (Req: `{req_total_fame:,}`)\n"
-                f"Fama PvP: `{kill_fame:,}` (Req: `{req_kill_fame:,}`)"
-            )
-            await log_to_channel(self.bot, interaction.guild.id, log_msg, discord.Color.red())
+        # Se NÃO for membro, aplicamos o filtro. Se FOR membro, saltamos o filtro.
+        if not is_already_member:
+            total_fame = player_info.get('TotalFame', 0)
+            kill_fame = player_info.get('KillFame', 0)
             
-            await interaction.followup.send(
-                f"Olá, {interaction.user.mention}! Vimos que não cumpre todos os requisitos mínimos:\n\n"
-                f"**Sua Fama Total:** `{total_fame:,}` (Mínimo: `{req_total_fame:,}`)\n"
-                f"**Sua Fama PvP:** `{kill_fame:,}` (Mínimo: `{req_kill_fame:,}`)\n\n"
-                "Continue a jogar e volte a tentar quando atingir os objetivos!"
-            )
-            return
+            req_total_fame = config_data.get('fame_total', 0)
+            req_kill_fame = config_data.get('fame_pvp', 0)
 
-        # 5. Sucesso no Filtro - Gerar código e guardar
+            if total_fame < req_total_fame or kill_fame < req_kill_fame:
+                log_msg = (
+                    f"❌ **Filtro Falhou**\n"
+                    f"Utilizador: {interaction.user.mention} (`{nick}`)\n"
+                    f"Fama Total: `{total_fame:,}` (Req: `{req_total_fame:,}`)\n"
+                    f"Fama PvP: `{kill_fame:,}` (Req: `{req_kill_fame:,}`)"
+                )
+                await log_to_channel(self.bot, interaction.guild.id, log_msg, discord.Color.red())
+                
+                await interaction.followup.send(
+                    f"Olá, {interaction.user.mention}! Vimos que não cumpre todos os requisitos mínimos:\n\n"
+                    f"**Sua Fama Total:** `{total_fame:,}` (Mínimo: `{req_total_fame:,}`)\n"
+                    f"**Sua Fama PvP:** `{kill_fame:,}` (Mínimo: `{req_kill_fame:,}`)\n\n"
+                    "Continue a jogar e volte a tentar quando atingir os objetivos!"
+                )
+                return
+        # --- FIM DA MUDANÇA ---
+
+        # 5. Sucesso no Filtro (ou filtro ignorado) - Gerar código e guardar
         codigo = gerar_codigo()
         await self.bot.db_manager.execute_query(
             "INSERT INTO guild_members (discord_id, server_id, albion_nick, verification_code, status) "
@@ -112,36 +117,51 @@ class RecrutamentoCog(commands.Cog):
             interaction.user.id, interaction.guild.id, nick, codigo
         )
         
+        log_msg_title = "📝 Novo Registo Aceite"
+        embed_title = "✅ Requisitos Atingidos!"
+        if is_already_member:
+            log_msg_title = "📝 Registo de Membro Antigo"
+            embed_title = "👋 Olá, Membro Antigo!"
+
         log_msg = (
-            f"📝 **Novo Registo Aceite**\n"
+            f"**{log_msg_title}**\n"
             f"Utilizador: {interaction.user.mention} (`{nick}`)\n"
-            f"Requisitos: OK\n"
+            f"Filtro de Fama: {'Ignorado (Já é membro)' if is_already_member else 'OK'}\n"
             f"Código Gerado: `{codigo}`"
         )
         await log_to_channel(self.bot, interaction.guild.id, log_msg, discord.Color.blue())
 
         # 6. Enviar instruções
         embed = discord.Embed(
-            title="✅ Requisitos Atingidos!",
-            description=f"Parabéns, {interaction.user.mention}! O seu registo para **{nick}** foi aceite. Siga os passos finais:",
+            title=embed_title,
+            description=f"Olá, {interaction.user.mention}! O seu registo para **{nick}** foi aceite. Siga os passos finais:",
             color=discord.Color.green()
         )
-        embed.add_field(name="Passo 1: No Albion", value=(
-            f"1. Aplique para: **{config_data['guild_name']}**\n"
-            f"2. Cole na sua 'Bio' o código: **`{codigo}`**"
-        ), inline=False)
+        
+        # Se já for membro, não precisa de aplicar
+        if is_already_member:
+             embed.add_field(name="Passo 1: No Albion", value=(
+                f"Para confirmar que a conta é sua, cole na sua 'Bio' o código: **`{codigo}`**"
+            ), inline=False)
+        else:
+            embed.add_field(name="Passo 1: No Albion", value=(
+                f"1. Aplique para: **{config_data['guild_name']}**\n"
+                f"2. Cole na sua 'Bio' o código: **`{codigo}`**"
+            ), inline=False)
+            
         embed.add_field(name="Passo 2: Aguardar", value=(
             "É tudo! O bot irá verificar automaticamente. "
-            "Quando for aceite E o código estiver na bio, será promovido."
+            "Quando a sua aplicação for aceite E o código estiver na bio, será promovido."
         ), inline=False)
         
         await interaction.followup.send(embed=embed)
 
     # --- Loop de Verificação (Registo) ---
-    @tasks.loop(minutes=3) # Corre a cada 3 minutos
+    @tasks.loop(minutes=3)
     async def verificacao_automatica(self):
         pending_list = await self.bot.db_manager.execute_query(
-            "SELECT * FROM guild_members WHERE status = 'pending'", fetch="all"
+            "SELECT * FROM guild_members WHERE status = 'pending'",
+            fetch="all"
         )
         if not pending_list:
             logging.info("[Loop de Registo] Nenhum utilizador para verificar.")
@@ -156,15 +176,14 @@ class RecrutamentoCog(commands.Cog):
             codigo_esperado = user_data['verification_code']
             
             config_data = await self.bot.db_manager.execute_query(
-                "SELECT * FROM server_config WHERE server_id = $1", server_id, fetch="one"
+                "SELECT * FROM server_config WHERE server_id = $1",
+                server_id, fetch="one"
             )
             guild = self.bot.get_guild(server_id)
             
             if not guild or not config_data:
                 logging.warning(f"Servidor {server_id} ou config não encontrados. A remover user {user_id}.")
-                await self.bot.db_manager.execute_query(
-                    "DELETE FROM guild_members WHERE discord_id = $1", user_id
-                )
+                await self.bot.db_manager.execute_query("DELETE FROM guild_members WHERE discord_id = $1", user_id)
                 continue
                 
             membro = guild.get_member(user_id)
@@ -209,9 +228,9 @@ class RecrutamentoCog(commands.Cog):
                         discord.Color.green()
                     )
                     
-                    # Atualiza o status na DB de 'pending' para 'verified'
                     await self.bot.db_manager.execute_query(
-                        "UPDATE guild_members SET status = 'verified', verification_code = NULL WHERE discord_id = $1", user_id
+                        "UPDATE guild_members SET status = 'verified', verification_code = NULL WHERE discord_id = $1",
+                        user_id
                     )
 
                 except discord.Forbidden:
@@ -223,7 +242,7 @@ class RecrutamentoCog(commands.Cog):
 
     @verificacao_automatica.before_loop
     async def before_loop(self):
-        await self.bot.wait_until_ready() # Espera o bot estar 100% ligado
+        await self.bot.wait_until_ready()
 
 async def setup(bot):
     await bot.add_cog(RecrutamentoCog(bot))

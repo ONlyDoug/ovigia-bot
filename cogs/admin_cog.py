@@ -2,11 +2,10 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import logging
-import asyncpg # <- IMPORTAÇÃO CRÍTICA ADICIONADA
+import asyncpg 
 
 # --- Função de Verificação de Admin ---
 async def check_admin(interaction: discord.Interaction):
-    # Acede ao db_manager através do cliente (self.bot)
     config_data = await interaction.client.db_manager.execute_query(
         "SELECT admin_role_id FROM server_config WHERE server_id = $1",
         interaction.guild.id, fetch="one"
@@ -54,10 +53,8 @@ class AdminCog(commands.Cog):
                 );
             """)
             
-            # Limpa a tabela antiga (se existir)
             await self.bot.db_manager.execute_query("DROP TABLE IF EXISTS pending_users;")
 
-            # Adiciona a Foreign Key (com verificação)
             try:
                 await self.bot.db_manager.execute_query("""
                     ALTER TABLE guild_members
@@ -67,8 +64,7 @@ class AdminCog(commands.Cog):
                     ON DELETE CASCADE;
                 """)
             except asyncpg.exceptions.DuplicateObjectError:
-                # Esta é a linha que precisava do 'import asyncpg'
-                pass # A constraint já existe, tudo bem.
+                pass 
             
             print("Base de dados (O Vigia Bot) verificada e pronta.")
             
@@ -140,7 +136,14 @@ class AdminCog(commands.Cog):
             canal_comandos = await guild.create_text_channel("🔒-bot-comandos", category=cat_privada)
             canal_logs = await guild.create_text_channel("📢-bot-logs", category=cat_privada)
             
-            await canal_recrutamento.set_permissions(guild.default_role, send_messages=True, read_messages=True, view_channel=True)
+            # --- MUDANÇA IMPORTANTE AQUI ---
+            await canal_recrutamento.set_permissions(
+                guild.default_role, 
+                send_messages=True, 
+                read_messages=True, 
+                view_channel=True,
+                use_application_commands=True # <--- A CORREÇÃO
+            )
             
             await self.bot.db_manager.execute_query(
                 "UPDATE server_config SET canal_registo_id = $1, canal_logs_id = $2 WHERE server_id = $3",
