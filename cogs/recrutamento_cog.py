@@ -1,7 +1,6 @@
 import discord
 from discord.ext import commands, tasks
 from discord import app_commands
-import database as db
 import random
 import string
 import logging
@@ -10,7 +9,9 @@ import logging
 async def log_to_channel(bot, guild_id, message, color=None):
     """Envia uma mensagem de log para o canal de logs configurado."""
     try:
-        config_data = await db.get_config(guild_id)
+        config_data = await bot.db_manager.execute_query(
+            "SELECT canal_logs_id FROM server_config WHERE server_id = $1", guild_id, fetch="one"
+        )
         if not config_data or not config_data.get('canal_logs_id'):
             print(f"Log falhou: Canal de logs não configurado para {guild_id}")
             return
@@ -39,7 +40,9 @@ class RecrutamentoCog(commands.Cog):
     @app_commands.command(name="registrar", description="Inicia o seu processo de registo na guilda.")
     @app_commands.describe(nick="O seu nick exato no Albion Online.")
     async def registrar(self, interaction: discord.Interaction, nick: str):
-        config_data = await db.get_config(interaction.guild.id)
+        config_data = await self.bot.db_manager.execute_query(
+            "SELECT * FROM server_config WHERE server_id = $1", interaction.guild.id, fetch="one"
+        )
         
         # 1. Verifica se o setup está completo
         if not all([
@@ -100,7 +103,14 @@ class RecrutamentoCog(commands.Cog):
 
         # 5. Sucesso no Filtro - Gerar código e guardar
         codigo = gerar_codigo()
-        await db.add_pending_user(interaction.user.id, interaction.guild.id, nick, codigo)
+        await self.bot.db_manager.execute_query(
+            "INSERT INTO guild_members (discord_id, server_id, albion_nick, verification_code, status) "
+            "VALUES ($1, $2, $3, $4, 'pending') "
+            "ON CONFLICT (discord_id) DO UPDATE SET "
+            "server_id = EXCLUDED.server_id, albion_nick = EXCLUDED.albion_nick, "
+            "verification_code = EXCLUDED.verification_code, status = 'pending'",
+            interaction.user.id, interaction.guild.id, nick, codigo
+        )
         
         log_msg = (
             f"📝 **Novo Registo Aceite**\n"
@@ -130,7 +140,9 @@ class RecrutamentoCog(commands.Cog):
     # --- Loop de Verificação (Registo) ---
     @tasks.loop(minutes=3) # Corre a cada 3 minutos
     async def verificacao_automatica(self):
-        pending_list = await db.get_pending_users()
+        pending_list = await self.bot.db_manager.execute_query(
+            "SELECT * FROM guild_members WHERE status = 'pending'", fetch="all"
+        )
         if not pending_list:
             logging.info("[Loop de Registo] Nenhum utilizador para verificar.")
             return
@@ -143,18 +155,22 @@ class RecrutamentoCog(commands.Cog):
             albion_nick = user_data['albion_nick']
             codigo_esperado = user_data['verification_code']
             
-            config_data = await db.get_config(server_id)
+            config_data = await self.bot.db_manager.execute_query(
+                "SELECT * FROM server_config WHERE server_id = $1", server_id, fetch="one"
+            )
             guild = self.bot.get_guild(server_id)
             
             if not guild or not config_data:
                 logging.warning(f"Servidor {server_id} ou config não encontrados. A remover user {user_id}.")
-                await db.remove_guild_member(user_id) # Limpa DB
+                await self.bot.db_manager.execute_query(
+                    "DELETE FROM guild_members WHERE discord_id = $1", user_id
+                )
                 continue
                 
             membro = guild.get_member(user_id)
             if not membro:
                 logging.warning(f"Utilizador {user_id} saiu do servidor {guild.name}. A remover.")
-                await db.remove_guild_member(user_id) # Limpa DB
+                await self.bot.db_manager.execute_query("DELETE FROM guild_members WHERE discord_id = $1", user_id)
                 continue
             
             if not all([config_data.get('guild_name'), config_data.get('role_id')]):
@@ -194,7 +210,9 @@ class RecrutamentoCog(commands.Cog):
                     )
                     
                     # Atualiza o status na DB de 'pending' para 'verified'
-                    await db.set_user_verified(user_id)
+                    await self.bot.db_manager.execute_query(
+                        "UPDATE guild_members SET status = 'verified', verification_code = NULL WHERE discord_id = $1", user_id
+                    )
 
                 except discord.Forbidden:
                     await log_to_channel(self.bot, guild.id, f"❌ ERRO ADMIN: Não tenho permissão para dar o cargo ou mudar o nick de {membro.mention}. (Verifique a hierarquia de cargos).", discord.Color.dark_red())

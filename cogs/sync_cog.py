@@ -1,6 +1,5 @@
 import discord
 from discord.ext import commands, tasks
-import database as db
 import logging
 # Importamos a função de log do outro cog para manter o padrão
 from cogs.recrutamento_cog import log_to_channel 
@@ -14,7 +13,9 @@ class SyncCog(commands.Cog):
     @tasks.loop(minutes=30) # Corre a cada 30 minutos
     async def limpeza_automatica(self):
         # 1. Obter todos os membros VERIFICADOS
-        verified_list = await db.get_verified_users()
+        verified_list = await self.bot.db_manager.execute_query(
+            "SELECT * FROM guild_members WHERE status = 'verified'", fetch="all"
+        )
         
         if not verified_list:
             logging.info("[Loop de Limpeza] Nenhum membro verificado para sincronizar.")
@@ -28,18 +29,22 @@ class SyncCog(commands.Cog):
             albion_nick = user_data['albion_nick']
             
             # 2. Obter config, guild e membro
-            config_data = await db.get_config(server_id)
+            config_data = await self.bot.db_manager.execute_query(
+                "SELECT * FROM server_config WHERE server_id = $1", server_id, fetch="one"
+            )
             guild = self.bot.get_guild(server_id)
             
             if not guild or not config_data:
                 logging.warning(f"Servidor {server_id} ou config não encontrados. A remover user {user_id}.")
-                await db.remove_guild_member(user_id)
+                await self.bot.db_manager.execute_query(
+                    "DELETE FROM guild_members WHERE discord_id = $1", user_id
+                )
                 continue
                 
             membro = guild.get_member(user_id)
             if not membro:
                 logging.warning(f"Utilizador {user_id} (verificado) saiu do servidor {guild.name}. A remover.")
-                await db.remove_guild_member(user_id)
+                await self.bot.db_manager.execute_query("DELETE FROM guild_members WHERE discord_id = $1", user_id)
                 continue
 
             if not config_data.get('guild_name'):
@@ -73,7 +78,9 @@ class SyncCog(commands.Cog):
                     await membro.kick(reason="Sincronização: Não faz mais parte da guilda no Albion Online.")
                     
                     # Remove da nossa base de dados
-                    await db.remove_guild_member(user_id)
+                    await self.bot.db_manager.execute_query(
+                        "DELETE FROM guild_members WHERE discord_id = $1", user_id
+                    )
 
                 except discord.Forbidden:
                     await log_to_channel(self.bot, guild.id, f"❌ ERRO ADMIN: Tentei expulsar {membro.mention}, mas não tenho permissão de 'Expulsar Membros'.", discord.Color.dark_red())

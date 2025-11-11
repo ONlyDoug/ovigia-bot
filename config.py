@@ -1,13 +1,13 @@
 import os
+from dotenv import load_dotenv
 
-# Token do Bot
+# Carrega o .env para testes locais
+load_dotenv()
+
 TOKEN = os.environ.get("DISCORD_TOKEN")
+DATABASE_URL = os.environ.get("DATABASE_URL")
 
-# Chaves do Supabase
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-
-if not all([TOKEN, SUPABASE_URL, SUPABASE_KEY]):
-    print("ERRO CRÍTICO: Variáveis de ambiente em falta!")
-    print("Verifique: DISCORD_TOKEN, SUPABASE_URL, SUPABASE_KEY")
+if not TOKEN or not DATABASE_URL:
+    print("ERRO CRÍTICO: DISCORD_TOKEN ou DATABASE_URL não definidos!")
+    print("Verifique as Variáveis de Ambiente na Discloud.")
     exit()
