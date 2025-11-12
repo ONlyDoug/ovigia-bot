@@ -46,6 +46,28 @@ async def check_admin(interaction: discord.Interaction):
         return False
     return True
 
+# --- Versão de Verificação para Comandos de Prefixo (!) ---
+def check_admin_prefix():
+    async def predicate(ctx):
+        # Verifica se é admin do servidor (para o !sync)
+        if ctx.author.guild_permissions.administrator:
+            return True
+        
+        # Verifica se tem o cargo de admin do bot
+        config_data = await ctx.bot.db_manager.execute_query(
+            "SELECT admin_role_id FROM server_config WHERE server_id = $1",
+            ctx.guild.id, fetch="one"
+        )
+        if not config_data or not config_data.get('admin_role_id'):
+            return False # Falha silenciosamente
+        
+        admin_role_id = config_data['admin_role_id']
+        if any(role.id == admin_role_id for role in ctx.author.roles):
+            return True
+            
+        return False
+    return commands.check(predicate)
+
 class AdminCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -53,7 +75,6 @@ class AdminCog(commands.Cog):
     # --- FUNÇÃO DE CRIAÇÃO DA DB (CORRIGIDA) ---
     async def initialize_database_schema(self):
         try:
-            # Tabela de Configuração
             await self.bot.db_manager.execute_query("""
                 CREATE TABLE IF NOT EXISTS server_config (
                     server_id BIGINT PRIMARY KEY, guild_name TEXT, role_id BIGINT,
@@ -65,8 +86,6 @@ class AdminCog(commands.Cog):
             try:
                 await self.bot.db_manager.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS recruta_role_id BIGINT;")
             except Exception: pass
-
-            # Tabela de Membros (CORREÇÃO AQUI)
             await self.bot.db_manager.execute_query("""
                 CREATE TABLE IF NOT EXISTS guild_members (
                     discord_id BIGINT PRIMARY KEY, server_id BIGINT, albion_nick TEXT NOT NULL,
@@ -74,20 +93,13 @@ class AdminCog(commands.Cog):
                     created_at TIMESTAMPTZ DEFAULT now() 
                 );
             """)
-            
-            # Tabela de Logs (CORREÇÃO AQUI)
             await self.bot.db_manager.execute_query("""
                 CREATE TABLE IF NOT EXISTS recruitment_log (
-                    id SERIAL PRIMARY KEY,
-                    server_id BIGINT,
-                    discord_id BIGINT,
-                    albion_nick TEXT,
-                    action TEXT NOT NULL,
-                    admin_id BIGINT,
+                    id SERIAL PRIMARY KEY, server_id BIGINT, discord_id BIGINT,
+                    albion_nick TEXT, action TEXT NOT NULL, admin_id BIGINT,
                     timestamp TIMESTAMPTZ DEFAULT now()
                 );
             """)
-            
             await self.bot.db_manager.execute_query("DROP TABLE IF EXISTS pending_users;")
             try:
                 await self.bot.db_manager.execute_query("""
@@ -211,7 +223,6 @@ class AdminCog(commands.Cog):
 
     @admin.command(name="relatorio", description="Gera um relatório de recrutamento dos últimos dias.")
     @app_commands.check(check_admin)
-    @app_commands.describe(dias="O número de dias para incluir no relatório (padrão: 7).")
     async def relatorio(self, interaction: discord.Interaction, dias: int = 7):
         await interaction.response.defer(ephemeral=True)
         data_limite = datetime.utcnow() - timedelta(days=dias)
@@ -234,6 +245,16 @@ class AdminCog(commands.Cog):
             admin_texto = "\n".join([f"`{row['total']}` aprovações - <@{row['admin_id']}>" for row in admin_data])
         embed.add_field(name="🏆 Staff Ativo (Aprovações Manuais)", value=admin_texto, inline=False)
         await interaction.followup.send(embed=embed)
+
+    # --- COMANDO 8: SYNC (NOVO) ---
+    @commands.command(name="sync", hidden=True)
+    @check_admin_prefix() # Usa o verificador de prefixo
+    async def sync_commands(self, ctx: commands.Context):
+        """Força a sincronização de comandos de barra para este servidor."""
+        msg = await ctx.send("🔄 A sincronizar comandos de barra para este servidor...")
+        await self.bot.tree.sync(guild=ctx.guild)
+        await msg.edit(content="✅ Comandos de barra sincronizados! Pode demorar alguns minutos a aparecer.")
+
 
 # Obrigatório para carregar o Cog
 async def setup(bot):
