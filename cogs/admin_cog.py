@@ -5,7 +5,7 @@ import logging
 import asyncpg
 import random
 import string
-from datetime import datetime, timedelta # Novo
+from datetime import datetime, timedelta
 
 # --- Funções Auxiliares (Copiadas para evitar import circular) ---
 def gerar_codigo(tamanho=6):
@@ -63,28 +63,31 @@ class AdminCog(commands.Cog):
                 );
             """)
             try:
-                await self.bot.db_manager.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS recruta_role_id BIGINT;")
+                await self.bot.db_manager.execute_query("""
+                    ALTER TABLE server_config
+                    ADD COLUMN IF NOT EXISTS recruta_role_id BIGINT;
+                """)
             except Exception: pass
 
-            # Tabela de Membros
+            # Tabela de Membros (CORREÇÃO AQUI)
             await self.bot.db_manager.execute_query("""
                 CREATE TABLE IF NOT EXISTS guild_members (
                     discord_id BIGINT PRIMARY KEY, server_id BIGINT, albion_nick TEXT NOT NULL,
                     verification_code TEXT, status TEXT NOT NULL DEFAULT 'pending',
-                    created_at TIMESTPTZ DEFAULT now()
+                    created_at TIMESTAMETZ DEFAULT now() 
                 );
             """)
             
-            # --- NOVA TABELA DE LOGS ---
+            # Tabela de Logs (CORREÇÃO AQUI)
             await self.bot.db_manager.execute_query("""
                 CREATE TABLE IF NOT EXISTS recruitment_log (
                     id SERIAL PRIMARY KEY,
                     server_id BIGINT,
                     discord_id BIGINT,
                     albion_nick TEXT,
-                    action TEXT NOT NULL, -- 'filtered', 'registered', 'verified_auto', 'approved_manual', 'kicked_auto'
-                    admin_id BIGINT, -- Quem executou a ação manual
-                    timestamp TIMESTPTZ DEFAULT now()
+                    action TEXT NOT NULL,
+                    admin_id BIGINT,
+                    timestamp TIMESTAMETZ DEFAULT now()
                 );
             """)
             
@@ -107,7 +110,7 @@ class AdminCog(commands.Cog):
     # --- Grupo de Comandos ---
     admin = app_commands.Group(name="admin", description="Comandos de administração do O Vigia Bot.")
 
-    # --- (Comandos de Setup 1-5 permanecem iguais) ---
+    # --- (Todos os comandos de setup 1-8 permanecem exatamente iguais) ---
     @admin.command(name="setup_cargo_admin", description="Passo 1: Define o cargo que pode usar os comandos de admin.")
     @app_commands.checks.has_permissions(administrator=True)
     async def setup_admin_role(self, interaction: discord.Interaction, cargo: discord.Role):
@@ -156,27 +159,12 @@ class AdminCog(commands.Cog):
     async def aprovar_manual(self, interaction: discord.Interaction, membro: discord.Member, nick_albion: str):
         await interaction.response.defer(ephemeral=True)
         player_id = await self.bot.albion_client.search_player(nick_albion)
-        if not player_id:
-            await interaction.followup.send(f"❌ Falha: Não encontrei o jogador `{nick_albion}`.")
-            return
-
+        if not player_id: await interaction.followup.send(f"❌ Falha: Não encontrei o jogador `{nick_albion}`."); return
         codigo = gerar_codigo()
-        await self.bot.db_manager.execute_query(
-            "INSERT INTO guild_members (discord_id, server_id, albion_nick, verification_code, status) VALUES ($1, $2, $3, $4, 'pending') "
-            "ON CONFLICT (discord_id) DO UPDATE SET "
-            "server_id = EXCLUDED.server_id, albion_nick = EXCLUDED.albion_nick, "
-            "verification_code = EXCLUDED.verification_code, status = 'pending'",
-            membro.id, interaction.guild.id, nick_albion, codigo
-        )
-        
-        # Log para o canal e para a DB
+        await self.bot.db_manager.execute_query("INSERT INTO guild_members (discord_id, server_id, albion_nick, verification_code, status) VALUES ($1, $2, $3, $4, 'pending') ON CONFLICT (discord_id) DO UPDATE SET server_id = EXCLUDED.server_id, albion_nick = EXCLUDED.albion_nick, verification_code = EXCLUDED.verification_code, status = 'pending'", membro.id, interaction.guild.id, nick_albion, codigo)
         log_msg = (f"⚠️ **Aprovação Manual**\nAdmin: {interaction.user.mention}\nUtilizador: {membro.mention} (`{nick_albion}`)\nCódigo Gerado: `{codigo}`")
         await log_to_channel(self.bot, interaction.guild.id, log_msg, discord.Color.gold())
-        await self.bot.db_manager.execute_query(
-            "INSERT INTO recruitment_log (server_id, discord_id, albion_nick, action, admin_id) VALUES ($1, $2, $3, 'approved_manual', $4)",
-            interaction.guild.id, membro.id, nick_albion, interaction.user.id
-        )
-
+        await self.bot.db_manager.execute_query("INSERT INTO recruitment_log (server_id, discord_id, albion_nick, action, admin_id) VALUES ($1, $2, $3, 'approved_manual', $4)", interaction.guild.id, membro.id, nick_albion, interaction.user.id)
         try:
             config_data = await self.bot.db_manager.execute_query("SELECT guild_name FROM server_config WHERE server_id = $1", interaction.guild.id, fetch="one")
             guild_name = config_data.get('guild_name', 'a sua guilda')
@@ -191,7 +179,6 @@ class AdminCog(commands.Cog):
     @admin.command(name="status", description="Mostra a configuração atual e o número de pendentes.")
     @app_commands.check(check_admin)
     async def status(self, interaction: discord.Interaction):
-        # (Este comando não precisa de alterações, o da última vez está perfeito)
         config_data = await self.bot.db_manager.execute_query("SELECT * FROM server_config WHERE server_id = $1", interaction.guild.id, fetch="one")
         if not config_data: return await interaction.response.send_message("O bot ainda não foi configurado.", ephemeral=True)
         def format_mention(id_val, type):
@@ -225,92 +212,30 @@ class AdminCog(commands.Cog):
         except discord.Forbidden:
             await interaction.followup.send("❌ Não tenho permissão para `Gerir Permissões` nesse canal.")
 
-    # --- COMANDO 8: RELATÓRIO (NOVO) ---
     @admin.command(name="relatorio", description="Gera um relatório de recrutamento dos últimos dias.")
     @app_commands.check(check_admin)
     @app_commands.describe(dias="O número de dias para incluir no relatório (padrão: 7).")
     async def relatorio(self, interaction: discord.Interaction, dias: int = 7):
         await interaction.response.defer(ephemeral=True)
-        
         data_limite = datetime.utcnow() - timedelta(days=dias)
-        
-        # Query para agregar os dados
-        query = """
-            SELECT 
-                action, 
-                COUNT(*) as total
-            FROM 
-                recruitment_log
-            WHERE 
-                server_id = $1 AND timestamp >= $2
-            GROUP BY 
-                action;
-        """
-        
+        query = "SELECT action, COUNT(*) as total FROM recruitment_log WHERE server_id = $1 AND timestamp >= $2 GROUP BY action;"
         log_data = await self.bot.db_manager.execute_query(query, interaction.guild.id, data_limite, fetch="all")
-        
         if not log_data:
             return await interaction.followup.send(f"Nenhuma atividade de recrutamento encontrada nos últimos {dias} dias.")
-
-        # Formata os dados
-        stats = {
-            'filtered': 0,
-            'registered': 0,
-            'verified_auto': 0,
-            'approved_manual': 0,
-            'kicked_auto': 0
-        }
+        stats = {'filtered': 0, 'registered': 0, 'verified_auto': 0, 'approved_manual': 0, 'kicked_auto': 0}
         for row in log_data:
-            if row['action'] in stats:
-                stats[row['action']] = row['total']
-        
+            if row['action'] in stats: stats[row['action']] = row['total']
         total_entradas = stats['verified_auto'] + stats['approved_manual']
-        
-        embed = discord.Embed(
-            title=f"📊 Relatório de Recrutamento (Últimos {dias} Dias)",
-            color=discord.Color.blue(),
-            timestamp=datetime.utcnow()
-        )
-        
-        embed.add_field(
-            name="🏁 Entradas",
-            value=f"**{total_entradas}** Membros Verificados\n"
-                  f"`{stats['verified_auto']}` (Automáticos)\n"
-                  f"`{stats['approved_manual']}` (Manuais)",
-            inline=True
-        )
-        embed.add_field(
-            name="⛔ Filtro",
-            value=f"**{stats['filtered']}** Recrutas Rejeitados\n"
-                  f"`{stats['registered']}` (Registos bem-sucedidos)\n",
-            inline=True
-        )
-        embed.add_field(
-            name="🚪 Saídas",
-            value=f"**{stats['kicked_auto']}** Membros Expulsos (Sync)",
-            inline=True
-        )
-        
-        # Pega os 5 admins mais ativos (exemplo)
-        admin_query = """
-            SELECT admin_id, COUNT(*) as total
-            FROM recruitment_log
-            WHERE server_id = $1 AND timestamp >= $2 AND action = 'approved_manual'
-            GROUP BY admin_id
-            ORDER BY total DESC
-            LIMIT 5;
-        """
+        embed = discord.Embed(title=f"📊 Relatório de Recrutamento (Últimos {dias} Dias)", color=discord.Color.blue(), timestamp=datetime.utcnow())
+        embed.add_field(name="🏁 Entradas", value=f"**{total_entradas}** Membros Verificados\n`{stats['verified_auto']}` (Automáticos)\n`{stats['approved_manual']}` (Manuais)", inline=True)
+        embed.add_field(name="⛔ Filtro", value=f"**{stats['filtered']}** Recrutas Rejeitados\n`{stats['registered']}` (Registos bem-sucedidos)\n", inline=True)
+        embed.add_field(name="🚪 Saídas", value=f"**{stats['kicked_auto']}** Membros Expulsos (Sync)", inline=True)
+        admin_query = "SELECT admin_id, COUNT(*) as total FROM recruitment_log WHERE server_id = $1 AND timestamp >= $2 AND action = 'approved_manual' GROUP BY admin_id ORDER BY total DESC LIMIT 5;"
         admin_data = await self.bot.db_manager.execute_query(admin_query, interaction.guild.id, data_limite, fetch="all")
-        
         admin_texto = "Nenhuma aprovação manual."
         if admin_data:
-            admin_texto = "\n".join(
-                f"`{row['total']}` aprovações - <@{row['admin_id']}>"
-                for row in admin_data
-            )
-        
+            admin_texto = "\n".join([f"`{row['total']}` aprovações - <@{row['admin_id']}>" for row in admin_data])
         embed.add_field(name="🏆 Staff Ativo (Aprovações Manuais)", value=admin_texto, inline=False)
-        
         await interaction.followup.send(embed=embed)
 
 # Obrigatório para carregar o Cog
