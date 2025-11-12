@@ -30,14 +30,14 @@ async def log_to_channel(bot, guild_id, message, color=None):
 # --- Função de Gerar Código (Auxiliar) ---
 def gerar_codigo(tamanho=6):
     caracteres = string.ascii_uppercase + string.digits
-    return ''.join(random.choice(caracteres) for _ in range(tamanho))
+    return ''.join(random.choice(char for char in caracteres if char not in '0oO1lI') for _ in range(tamanho)) # Evita caracteres confusos
 
 class RecrutamentoCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.verificacao_automatica.start()
 
-    # --- Comando /registrar (ATUALIZADO COM FILTRO) ---
+    # --- Comando /registrar (Lógica do filtro atualizada) ---
     @app_commands.command(name="registrar", description="Inicia o seu processo de registo na guilda.")
     @app_commands.describe(nick="O seu nick exato no Albion Online.")
     async def registrar(self, interaction: discord.Interaction, nick: str):
@@ -75,12 +75,11 @@ class RecrutamentoCog(commands.Cog):
             )
             return
 
-        # --- MUDANÇA IMPORTANTE AQUI ---
         # Verificamos se o jogador já está na guilda
         player_guild_name = player_info.get('GuildName', '')
         is_already_member = player_guild_name.lower() == config_data.get('guild_name', '').lower()
 
-        # Se NÃO for membro, aplicamos o filtro. Se FOR membro, saltamos o filtro.
+        # Se NÃO for membro, aplicamos o filtro.
         if not is_already_member:
             total_fame = player_info.get('TotalFame', 0)
             kill_fame = player_info.get('KillFame', 0)
@@ -104,9 +103,8 @@ class RecrutamentoCog(commands.Cog):
                     "Continue a jogar e volte a tentar quando atingir os objetivos!"
                 )
                 return
-        # --- FIM DA MUDANÇA ---
 
-        # 5. Sucesso no Filtro (ou filtro ignorado) - Gerar código e guardar
+        # Sucesso no Filtro (ou filtro ignorado)
         codigo = gerar_codigo()
         await self.bot.db_manager.execute_query(
             "INSERT INTO guild_members (discord_id, server_id, albion_nick, verification_code, status) "
@@ -121,7 +119,7 @@ class RecrutamentoCog(commands.Cog):
         embed_title = "✅ Requisitos Atingidos!"
         if is_already_member:
             log_msg_title = "📝 Registo de Membro Antigo"
-            embed_title = "👋 Olá, Membro Antigo!"
+            embed_title = "👋 Olá, Membro!" # Alterado de "Membro Antigo"
 
         log_msg = (
             f"**{log_msg_title}**\n"
@@ -131,14 +129,13 @@ class RecrutamentoCog(commands.Cog):
         )
         await log_to_channel(self.bot, interaction.guild.id, log_msg, discord.Color.blue())
 
-        # 6. Enviar instruções
+        # Enviar instruções
         embed = discord.Embed(
             title=embed_title,
             description=f"Olá, {interaction.user.mention}! O seu registo para **{nick}** foi aceite. Siga os passos finais:",
             color=discord.Color.green()
         )
         
-        # Se já for membro, não precisa de aplicar
         if is_already_member:
              embed.add_field(name="Passo 1: No Albion", value=(
                 f"Para confirmar que a conta é sua, cole na sua 'Bio' o código: **`{codigo}`**"
@@ -156,7 +153,7 @@ class RecrutamentoCog(commands.Cog):
         
         await interaction.followup.send(embed=embed)
 
-    # --- Loop de Verificação (Registo) ---
+    # --- Loop de Verificação (Registo) (ATUALIZADO) ---
     @tasks.loop(minutes=3)
     async def verificacao_automatica(self):
         pending_list = await self.bot.db_manager.execute_query(
@@ -215,16 +212,36 @@ class RecrutamentoCog(commands.Cog):
                 # SUCESSO!
                 logging.info(f"SUCESSO: {membro.name} ({albion_nick}) verificado.")
                 try:
-                    cargo = guild.get_role(config_data['role_id'])
-                    if not cargo:
-                        await log_to_channel(self.bot, guild.id, f"❌ ERRO ADMIN: Cargo ID `{config_data['role_id']}` não encontrado.", discord.Color.dark_red())
+                    # --- LÓGICA DE TROCA DE CARGOS (ATUALIZADA) ---
+                    cargo_membro = guild.get_role(config_data['role_id'])
+                    cargo_recruta_id = config_data.get('recruta_role_id')
+                    cargo_recruta = None
+                    
+                    if cargo_recruta_id:
+                        cargo_recruta = guild.get_role(cargo_recruta_id)
+
+                    if not cargo_membro:
+                        await log_to_channel(self.bot, guild.id, f"❌ ERRO ADMIN: Cargo de Membro ID `{config_data['role_id']}` não encontrado.", discord.Color.dark_red())
                         continue
                         
+                    # Prepara a lista de cargos a adicionar e remover
+                    cargos_para_adicionar = [cargo_membro]
+                    cargos_para_remover = []
+                    
+                    if cargo_recruta and cargo_recruta in membro.roles:
+                        cargos_para_remover.append(cargo_recruta)
+
+                    # Executa as ações
                     await membro.edit(nick=albion_nick)
-                    await membro.add_roles(cargo)
+                    if cargos_para_adicionar:
+                        await membro.add_roles(*cargos_para_adicionar, reason="Verificação de Recrutamento")
+                    if cargos_para_remover:
+                        await membro.remove_roles(*cargos_para_remover, reason="Verificação de Recrutamento")
                     
                     await log_to_channel(self.bot, guild.id,
-                        f"✅ **Verificado!** {membro.mention} (`{albion_nick}`) foi promovido e recebeu o cargo {cargo.mention}.",
+                        f"✅ **Verificado!** {membro.mention} (`{albion_nick}`) foi promovido.\n"
+                        f"**Adicionado:** {cargo_membro.mention}\n"
+                        f"**Removido:** {cargo_recruta.mention if cargo_recruta else 'Nenhum'}",
                         discord.Color.green()
                     )
                     
@@ -234,7 +251,7 @@ class RecrutamentoCog(commands.Cog):
                     )
 
                 except discord.Forbidden:
-                    await log_to_channel(self.bot, guild.id, f"❌ ERRO ADMIN: Não tenho permissão para dar o cargo ou mudar o nick de {membro.mention}. (Verifique a hierarquia de cargos).", discord.Color.dark_red())
+                    await log_to_channel(self.bot, guild.id, f"❌ ERRO ADMIN: Não tenho permissão para dar/remover cargos ou mudar o nick de {membro.mention}. (Verifique a hierarquia de cargos).", discord.Color.dark_red())
                 except Exception as e:
                     logging.error(f"Erro ao promover {membro.name}: {e}")
             else:

@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import logging
-import asyncpg 
+import asyncpg # Importa para apanhar o erro
 
 # --- Função de Verificação de Admin ---
 async def check_admin(interaction: discord.Interaction):
@@ -24,7 +24,7 @@ class AdminCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # --- FUNÇÃO DE CRIAÇÃO DA DB ---
+    # --- FUNÇÃO DE CRIAÇÃO DA DB (ATUALIZADA) ---
     async def initialize_database_schema(self):
         try:
             # Tabela de Configuração
@@ -37,10 +37,20 @@ class AdminCog(commands.Cog):
                     canal_logs_id BIGINT,
                     admin_role_id BIGINT,
                     fame_total BIGINT DEFAULT 0,
-                    fame_pvp BIGINT DEFAULT 0
+                    fame_pvp BIGINT DEFAULT 0,
+                    recruta_role_id BIGINT  -- <- NOVO
                 );
             """)
             
+            # Adiciona a coluna se ela não existir (para quem já tem a DB)
+            try:
+                await self.bot.db_manager.execute_query("""
+                    ALTER TABLE server_config
+                    ADD COLUMN IF NOT EXISTS recruta_role_id BIGINT;
+                """)
+            except Exception as e:
+                print(f"Nota: Falha ao tentar adicionar coluna 'recruta_role_id' (pode já existir): {e}")
+
             # Tabela de Membros
             await self.bot.db_manager.execute_query("""
                 CREATE TABLE IF NOT EXISTS guild_members (
@@ -49,7 +59,7 @@ class AdminCog(commands.Cog):
                     albion_nick TEXT NOT NULL,
                     verification_code TEXT,
                     status TEXT NOT NULL DEFAULT 'pending',
-                    created_at TIMESTAMPTZ DEFAULT now()
+                    created_at TIMESTPTZ DEFAULT now()
                 );
             """)
             
@@ -97,30 +107,21 @@ class AdminCog(commands.Cog):
     @app_commands.check(check_admin)
     async def criar_estrutura(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        
         guild = interaction.guild
         config_data = await self.bot.db_manager.execute_query(
             "SELECT admin_role_id FROM server_config WHERE server_id = $1",
             guild.id, fetch="one"
         )
         admin_role = guild.get_role(config_data['admin_role_id'])
-
         if not admin_role:
             await interaction.followup.send("ERRO: Cargo de admin não encontrado. Use `/admin setup_cargo_admin` novamente.")
             return
 
-        # Permissões
         perms_public_everyone = discord.PermissionOverwrite(read_messages=True, send_messages=False, view_channel=True)
         perms_admin_private = discord.PermissionOverwrite(read_messages=True, send_messages=True, view_channel=True)
         
         try:
-            # Categoria Pública
-            cat_publica = await guild.create_category(
-                "➡️ BEM-VINDO",
-                overwrites={guild.default_role: perms_public_everyone}
-            )
-            
-            # Categoria Privada
+            cat_publica = await guild.create_category("➡️ BEM-VINDO", overwrites={guild.default_role: perms_public_everyone})
             cat_privada = await guild.create_category(
                 "🔒 ADMINISTRAÇÃO",
                 overwrites={
@@ -129,20 +130,17 @@ class AdminCog(commands.Cog):
                     guild.me: perms_admin_private
                 }
             )
-
-            # Canais
             canal_info = await guild.create_text_channel("📜-regras-e-info", category=cat_publica)
             canal_recrutamento = await guild.create_text_channel("✅-recrutamento", category=cat_publica)
             canal_comandos = await guild.create_text_channel("🔒-bot-comandos", category=cat_privada)
             canal_logs = await guild.create_text_channel("📢-bot-logs", category=cat_privada)
             
-            # --- MUDANÇA IMPORTANTE AQUI ---
             await canal_recrutamento.set_permissions(
                 guild.default_role, 
                 send_messages=True, 
                 read_messages=True, 
                 view_channel=True,
-                use_application_commands=True # <--- A CORREÇÃO
+                use_application_commands=True
             )
             
             await self.bot.db_manager.execute_query(
@@ -153,14 +151,13 @@ class AdminCog(commands.Cog):
             await interaction.followup.send(
                 "✅ **Estrutura de Canais Criada!**\n\n"
                 f"**Categoria Pública:** {cat_publica.mention}\n"
-                f"  ↳ {canal_info.mention} (Escreva as regras e requisitos aqui)\n"
-                f"  ↳ {canal_recrutamento.mention} (Onde os recrutas usarão `/registrar`)\n\n"
+                f"  ↳ {canal_info.mention}\n"
+                f"  ↳ {canal_recrutamento.mention}\n\n"
                 f"**Categoria Privada:** {cat_privada.mention}\n"
-                f"  ↳ {canal_comandos.mention} (Use os próximos comandos aqui)\n"
-                f"  ↳ {canal_logs.mention} (Logs automáticos do bot)\n\n"
+                f"  ↳ {canal_comandos.mention}\n"
+                f"  ↳ {canal_logs.mention}\n\n"
                 f"**Próximo Passo:** Use `/admin setup_requisitos` no canal {canal_comandos.mention}."
             )
-
         except discord.Forbidden:
             await interaction.followup.send("ERRO: Não tenho permissão para `Gerir Canais`.")
         except Exception as e:
@@ -202,11 +199,26 @@ class AdminCog(commands.Cog):
             f"✅ **Guilda Definida!**\n"
             f"Nome da Guilda: `{nome_guilda}`\n"
             f"Cargo de Membro: {cargo_membro.mention}\n\n"
-            "🎉 **Configuração Concluída!** O bot está pronto para recrutar.",
+            "**Próximo Passo:** Use `/admin setup_tag_recruta` (opcional).",
             ephemeral=True
         )
 
-    # --- COMANDO 5: STATUS ---
+    # --- COMANDO 5: SETUP TAG RECRUTA (NOVO) ---
+    @admin.command(name="setup_tag_recruta", description="Passo 5 (Opcional): Define a tag de 'Recruta' a ser removida.")
+    @app_commands.check(check_admin)
+    @app_commands.describe(cargo="A tag que os novos membros recebem (ex: @Não Verificado).")
+    async def setup_tag_recruta(self, interaction: discord.Interaction, cargo: discord.Role):
+        await self.bot.db_manager.execute_query(
+            "UPDATE server_config SET recruta_role_id = $1 WHERE server_id = $2",
+            cargo.id, interaction.guild.id
+        )
+        await interaction.response.send_message(
+            f"✅ **Tag de Recruta Definida!**\n"
+            f"O bot irá **remover** o cargo {cargo.mention} dos membros quando forem verificados.",
+            ephemeral=True
+        )
+
+    # --- COMANDO 6: STATUS (ATUALIZADO) ---
     @admin.command(name="status", description="Mostra a configuração atual e o número de pendentes.")
     @app_commands.check(check_admin)
     async def status(self, interaction: discord.Interaction):
@@ -230,10 +242,14 @@ class AdminCog(commands.Cog):
             f"Fama Total: `{config_data.get('fame_total', 0):,}`\n"
             f"Fama PvP: `{config_data.get('fame_pvp', 0):,}`"
         ), inline=False)
+        
+        # ATUALIZADO
         embed.add_field(name="Cargos Discord", value=(
             f"Admin: {format_mention(config_data.get('admin_role_id'), 'role')}\n"
-            f"Membro: {format_mention(config_data.get('role_id'), 'role')}"
+            f"Membro: {format_mention(config_data.get('role_id'), 'role')}\n"
+            f"Recruta (a remover): {format_mention(config_data.get('recruta_role_id'), 'role')}"
         ), inline=True)
+        
         embed.add_field(name="Canais Discord", value=(
             f"Registo: {format_mention(config_data.get('canal_registo_id'), 'channel')}\n"
             f"Logs: {format_mention(config_data.get('canal_logs_id'), 'channel')}"
