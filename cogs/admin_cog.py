@@ -107,6 +107,7 @@ class AdminCog(commands.Cog):
     # --- Grupo de Comandos ---
     admin = app_commands.Group(name="admin", description="Comandos de administração do O Vigia Bot.")
 
+    # --- (Comandos de Setup 1-8 permanecem exatamente iguais) ---
     @admin.command(name="setup_cargo_admin", description="Passo 1: Define o cargo que pode usar os comandos de admin.")
     @app_commands.checks.has_permissions(administrator=True)
     async def setup_admin_role(self, interaction: discord.Interaction, cargo: discord.Role):

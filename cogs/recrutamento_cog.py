@@ -23,16 +23,12 @@ def gerar_codigo(tamanho=6):
     return ''.join(random.choice(caracteres) for _ in range(tamanho))
 
 # --- LÓGICA DE VERIFICAÇÃO (SEPARADA) ---
-# Separamos a lógica para que o /verificar e o loop automático a possam usar.
 async def verificar_membro(bot, config_data, membro: discord.Member, user_data: dict):
     guild = membro.guild
     albion_nick = user_data['albion_nick']
     codigo_esperado = user_data['verification_code']
 
-    # API Check
-    player_info = await bot.albion_client.get_player_info(
-        await bot.albion_client.search_player(albion_nick)
-    )
+    player_info = await bot.albion_client.get_player_info(await bot.albion_client.search_player(albion_nick))
     if not player_info:
         logging.warning(f"Falha ao obter info de {albion_nick} (ID: {membro.id}).")
         return (False, "Não foi possível encontrar a sua conta Albion. Tente usar `/registrar` novamente.")
@@ -72,17 +68,8 @@ async def verificar_membro(bot, config_data, membro: discord.Member, user_data: 
                 discord.Color.green()
             )
             
-            # Log para a DB
-            await bot.db_manager.execute_query(
-                "INSERT INTO recruitment_log (server_id, discord_id, albion_nick, action) VALUES ($1, $2, $3, 'verified_auto')",
-                guild.id, membro.id, albion_nick
-            )
-            
-            # Atualiza o status na DB
-            await bot.db_manager.execute_query(
-                "UPDATE guild_members SET status = 'verified', verification_code = NULL WHERE discord_id = $1",
-                membro.id
-            )
+            await bot.db_manager.execute_query("INSERT INTO recruitment_log (server_id, discord_id, albion_nick, action) VALUES ($1, $2, $3, 'verified_auto')", guild.id, membro.id, albion_nick)
+            await bot.db_manager.execute_query("UPDATE guild_members SET status = 'verified', verification_code = NULL WHERE discord_id = $1", membro.id)
             return (True, f"**Bem-vindo(a) à {guild.name}, {membro.mention}!**\n\nA sua conta `{albion_nick}` foi verificada com sucesso. O seu nick e cargos foram atualizados.")
 
         except discord.Forbidden:
@@ -106,7 +93,7 @@ class RecrutamentoCog(commands.Cog):
         self.bot = bot
         self.verificacao_automatica.start()
 
-    # --- Comando /registrar (Lógica do filtro de Fama corrigida) ---
+    # --- Comando /registrar (ATUALIZADO) ---
     @app_commands.command(name="registrar", description="Inicia o seu processo de registo na guilda.")
     @app_commands.describe(nick="O seu nick exato no Albion Online.")
     async def registrar(self, interaction: discord.Interaction, nick: str):
@@ -129,10 +116,15 @@ class RecrutamentoCog(commands.Cog):
             await interaction.followup.send(f"Não encontrei o jogador **{nick}**. Verifique o nome e tente novamente.")
             return
 
-        # --- LÓGICA DE BYPASS (CORRIGIDA) ---
+        # --- LÓGICA DE BYPASS E "ANÁLISE MANUAL" ---
         player_guild_name = player_info.get('GuildName', '')
         is_already_member = player_guild_name.lower() == config_data.get('guild_name', '').lower()
+        
+        log_msg_title = "📝 Novo Registo Aceite"
+        embed_title = "✅ Requisitos Atingidos!"
+        log_filtro = "OK"
 
+        # Se NÃO for membro, aplicamos o filtro.
         if not is_already_member:
             # --- CORREÇÃO DO BUG DA FAMA (PvE.Total) ---
             pve_data = player_info.get('PvE', {})
@@ -142,26 +134,28 @@ class RecrutamentoCog(commands.Cog):
             req_total_fame = config_data.get('fame_total', 0)
             req_kill_fame = config_data.get('fame_pvp', 0)
 
+            # Nova Lógica: Se falhar no filtro, apenas regista o aviso
             if total_fame < req_total_fame or kill_fame < req_kill_fame:
                 log_msg = (
-                    f"❌ **Filtro Falhou**\n"
+                    f"⚠️ **Filtro Falhou (Análise Manual)**\n"
                     f"Utilizador: {interaction.user.mention} (`{nick}`)\n"
                     f"Fama Total: `{total_fame:,}` (Req: `{req_total_fame:,}`)\n"
-                    f"Fama PvP: `{kill_fame:,}` (Req: `{req_kill_fame:,}`)\n"
-                    f"*Para aprovar manualmente, use `/admin aprovar_manual`.*"
+                    f"Fama PvP: `{kill_fame:,}` (Req: `{req_kill_fame:,}`)"
                 )
-                await log_to_channel(self.bot, interaction.guild.id, log_msg, discord.Color.red())
+                await log_to_channel(self.bot, interaction.guild.id, log_msg, discord.Color.orange()) # Log Laranja (Aviso)
                 await self.bot.db_manager.execute_query("INSERT INTO recruitment_log (server_id, discord_id, albion_nick, action) VALUES ($1, $2, $3, 'filtered')", interaction.guild.id, interaction.user.id, nick)
-                
-                await interaction.followup.send(
-                    f"Olá, {interaction.user.mention}! Vimos que não cumpre todos os requisitos mínimos:\n\n"
-                    f"**Sua Fama Total:** `{total_fame:,}` (Mínimo: `{req_total_fame:,}`)\n"
-                    f"**Sua Fama PvP:** `{kill_fame:,}` (Mínimo: `{req_kill_fame:,}`)\n\n"
-                    "Contacte um Oficial se for um caso especial."
-                )
-                return
+                log_filtro = "FALHOU (Pendente Manual)"
+                # A MENSAGEM PARA O UTILIZADOR CONTINUA A SER DE SUCESSO
+                embed_title = "⚠️ Análise Manual Pendente"
+        else:
+            # É um membro antigo
+            log_msg_title = "📝 Registo de Membro Antigo"
+            embed_title = "👋 Olá, Membro!"
+            log_filtro = "Ignorado (Já é membro)"
+        # --- FIM DA LÓGICA ---
 
-        # 5. Sucesso no Filtro (ou filtro ignorado)
+
+        # 5. Sucesso (ou bypass) - Gerar código e guardar
         codigo = gerar_codigo()
         await self.bot.db_manager.execute_query(
             "INSERT INTO guild_members (discord_id, server_id, albion_nick, verification_code, status) VALUES ($1, $2, $3, $4, 'pending') "
@@ -171,13 +165,10 @@ class RecrutamentoCog(commands.Cog):
             interaction.user.id, interaction.guild.id, nick, codigo
         )
         
-        log_msg_title = "📝 Novo Registo Aceite" if not is_already_member else "📝 Registo de Membro Antigo"
-        embed_title = "✅ Requisitos Atingidos!" if not is_already_member else "👋 Olá, Membro!"
-
         log_msg = (
             f"**{log_msg_title}**\n"
             f"Utilizador: {interaction.user.mention} (`{nick}`)\n"
-            f"Filtro de Fama: {'Ignorado (Já é membro)' if is_already_member else 'OK'}\n"
+            f"Filtro de Fama: **{log_filtro}**\n"
             f"Código Gerado: `{codigo}`"
         )
         await log_to_channel(self.bot, interaction.guild.id, log_msg, discord.Color.blue())
@@ -190,6 +181,10 @@ class RecrutamentoCog(commands.Cog):
         else:
             embed.add_field(name="Passo 1: No Albion", value=(f"1. Aplique para: **{config_data['guild_name']}**\n2. Cole na sua 'Bio' o código: **`{codigo}`**"), inline=False)
         embed.add_field(name="Passo 2: Aguardar", value=(f"É tudo! O bot irá verificar automaticamente.\n**Para acelerar, use `/verificar`** assim que estiver pronto."), inline=False)
+        
+        if log_filtro.startswith("FALHOU"):
+             embed.set_footer(text="Nota: A sua fama está abaixo dos requisitos. A sua verificação será concluída, mas um oficial irá rever o seu caso.")
+
         await interaction.followup.send(embed=embed)
 
     # --- COMANDO /verificar (NOVO) ---
@@ -202,25 +197,16 @@ class RecrutamentoCog(commands.Cog):
 
         await interaction.response.defer(ephemeral=True)
 
-        # 1. Encontra o registo pendente do utilizador
-        user_data = await self.bot.db_manager.execute_query(
-            "SELECT * FROM guild_members WHERE discord_id = $1 AND status = 'pending'",
-            interaction.user.id, fetch="one"
-        )
-        
+        user_data = await self.bot.db_manager.execute_query("SELECT * FROM guild_members WHERE discord_id = $1 AND status = 'pending'", interaction.user.id, fetch="one")
         if not user_data:
             return await interaction.followup.send("Não encontrei um registo pendente para si. Use `/registrar <nick>` primeiro.")
 
-        # 2. Chama a nossa função de lógica de verificação
         sucesso, mensagem = await verificar_membro(self.bot, config_data, interaction.user, user_data)
         
-        # 3. Envia o resultado para o utilizador
         if sucesso:
-            # Se for sucesso, a mensagem é pública (mas a chamada original foi ephemeral)
-            await interaction.followup.send(mensagem, ephemeral=False)
+            await interaction.followup.send(mensagem, ephemeral=False) # Mensagem pública
         else:
-            # Se for falha, a mensagem é privada
-            await interaction.followup.send(mensagem, ephemeral=True)
+            await interaction.followip.send(mensagem, ephemeral=True) # Mensagem privada
 
 
     # --- Loop de Verificação (Registo) ---
@@ -243,7 +229,6 @@ class RecrutamentoCog(commands.Cog):
                 await self.bot.db_manager.execute_query("DELETE FROM guild_members WHERE discord_id = $1", user_data['discord_id'])
                 continue
             
-            # Chama a lógica de verificação partilhada
             await verificar_membro(self.bot, config_data, membro, user_data)
 
     @verificacao_automatica.before_loop
