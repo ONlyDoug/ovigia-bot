@@ -24,7 +24,7 @@ class DatabaseManager:
                 database=self._db_name,
                 min_size=self._min_conn,
                 max_size=self._max_conn,
-                # --- CORREÇÃO (Dica do Log) ---
+                # --- A CORREÇÃO CRÍTICA ESTÁ AQUI ---
                 statement_cache_size=0 # Desativa o cache que causa o erro no pgbouncer
             )
             print("Pool de conexões (asyncpg) inicializado com sucesso.")
