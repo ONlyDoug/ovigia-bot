@@ -46,25 +46,14 @@ async def check_admin(interaction: discord.Interaction):
         return False
     return True
 
-# --- Versão de Verificação para Comandos de Prefixo (!) ---
+# --- Verificação para Comandos de Prefixo (!) ---
 def check_admin_prefix():
     async def predicate(ctx):
-        # Verifica se é admin do servidor (para o !sync)
-        if ctx.author.guild_permissions.administrator:
-            return True
-        
-        # Verifica se tem o cargo de admin do bot
-        config_data = await ctx.bot.db_manager.execute_query(
-            "SELECT admin_role_id FROM server_config WHERE server_id = $1",
-            ctx.guild.id, fetch="one"
-        )
-        if not config_data or not config_data.get('admin_role_id'):
-            return False # Falha silenciosamente
-        
+        if ctx.author.guild_permissions.administrator: return True
+        config_data = await ctx.bot.db_manager.execute_query("SELECT admin_role_id FROM server_config WHERE server_id = $1", ctx.guild.id, fetch="one")
+        if not config_data or not config_data.get('admin_role_id'): return False
         admin_role_id = config_data['admin_role_id']
-        if any(role.id == admin_role_id for role in ctx.author.roles):
-            return True
-            
+        if any(role.id == admin_role_id for role in ctx.author.roles): return True
         return False
     return commands.check(predicate)
 
@@ -83,8 +72,7 @@ class AdminCog(commands.Cog):
                     recruta_role_id BIGINT
                 );
             """)
-            try:
-                await self.bot.db_manager.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS recruta_role_id BIGINT;")
+            try: await self.bot.db_manager.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS recruta_role_id BIGINT;")
             except Exception: pass
             await self.bot.db_manager.execute_query("""
                 CREATE TABLE IF NOT EXISTS guild_members (
@@ -105,12 +93,9 @@ class AdminCog(commands.Cog):
                 await self.bot.db_manager.execute_query("""
                     ALTER TABLE guild_members
                     ADD CONSTRAINT fk_server_config
-                    FOREIGN KEY(server_id) 
-                    REFERENCES server_config(server_id)
-                    ON DELETE CASCADE;
+                    FOREIGN KEY(server_id) REFERENCES server_config(server_id) ON DELETE CASCADE;
                 """)
-            except asyncpg.exceptions.DuplicateObjectError:
-                pass 
+            except asyncpg.exceptions.DuplicateObjectError: pass 
             print("Base de dados (O Vigia Bot) verificada e pronta.")
         except Exception as e:
             print(f"❌ Erro CRÍTICO ao inicializar DB (Vigia): {e}")
@@ -119,7 +104,6 @@ class AdminCog(commands.Cog):
     # --- Grupo de Comandos ---
     admin = app_commands.Group(name="admin", description="Comandos de administração do O Vigia Bot.")
 
-    # --- (Comandos de Setup 1-8 permanecem exatamente iguais) ---
     @admin.command(name="setup_cargo_admin", description="Passo 1: Define o cargo que pode usar os comandos de admin.")
     @app_commands.checks.has_permissions(administrator=True)
     async def setup_admin_role(self, interaction: discord.Interaction, cargo: discord.Role):
@@ -223,6 +207,7 @@ class AdminCog(commands.Cog):
 
     @admin.command(name="relatorio", description="Gera um relatório de recrutamento dos últimos dias.")
     @app_commands.check(check_admin)
+    @app_commands.describe(dias="O número de dias para incluir no relatório (padrão: 7).")
     async def relatorio(self, interaction: discord.Interaction, dias: int = 7):
         await interaction.response.defer(ephemeral=True)
         data_limite = datetime.utcnow() - timedelta(days=dias)
@@ -236,7 +221,7 @@ class AdminCog(commands.Cog):
         total_entradas = stats['verified_auto'] + stats['approved_manual']
         embed = discord.Embed(title=f"📊 Relatório de Recrutamento (Últimos {dias} Dias)", color=discord.Color.blue(), timestamp=datetime.utcnow())
         embed.add_field(name="🏁 Entradas", value=f"**{total_entradas}** Membros Verificados\n`{stats['verified_auto']}` (Automáticos)\n`{stats['approved_manual']}` (Manuais)", inline=True)
-        embed.add_field(name="⛔ Filtro", value=f"**{stats['filtered']}** Recrutas Rejeitados\n`{stats['registered']}` (Registos bem-sucedidos)\n", inline=True)
+        embed.add_field(name="⛔ Filtro", value=f"**{stats['filtered']}** Recrutas Rejeitados (Aviso)\n`{stats['registered']}` (Registos bem-sucedidos)\n", inline=True)
         embed.add_field(name="🚪 Saídas", value=f"**{stats['kicked_auto']}** Membros Expulsos (Sync)", inline=True)
         admin_query = "SELECT admin_id, COUNT(*) as total FROM recruitment_log WHERE server_id = $1 AND timestamp >= $2 AND action = 'approved_manual' GROUP BY admin_id ORDER BY total DESC LIMIT 5;"
         admin_data = await self.bot.db_manager.execute_query(admin_query, interaction.guild.id, data_limite, fetch="all")
@@ -246,7 +231,7 @@ class AdminCog(commands.Cog):
         embed.add_field(name="🏆 Staff Ativo (Aprovações Manuais)", value=admin_texto, inline=False)
         await interaction.followup.send(embed=embed)
 
-    # --- COMANDO 8: SYNC (NOVO) ---
+    # --- COMANDO 10: SYNC (SECRETO) ---
     @commands.command(name="sync", hidden=True)
     @check_admin_prefix() # Usa o verificador de prefixo
     async def sync_commands(self, ctx: commands.Context):
@@ -254,7 +239,6 @@ class AdminCog(commands.Cog):
         msg = await ctx.send("🔄 A sincronizar comandos de barra para este servidor...")
         await self.bot.tree.sync(guild=ctx.guild)
         await msg.edit(content="✅ Comandos de barra sincronizados! Pode demorar alguns minutos a aparecer.")
-
 
 # Obrigatório para carregar o Cog
 async def setup(bot):

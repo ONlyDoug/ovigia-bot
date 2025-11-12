@@ -126,7 +126,7 @@ class RecrutamentoCog(commands.Cog):
 
         if not is_already_member:
             pve_data = player_info.get('PvE', {})
-            total_fame = pve_data.get('Total', 0)
+            total_fame = pve_data.get('Total', 0) 
             kill_fame = player_info.get('KillFame', 0)
             req_total_fame = config_data.get('fame_total', 0)
             req_kill_fame = config_data.get('fame_pvp', 0)
@@ -195,7 +195,7 @@ class RecrutamentoCog(commands.Cog):
             await interaction.followup.send(mensagem, ephemeral=False)
         else:
             # --- CORREÇÃO DE ERRO DE DIGITAÇÃO ---
-            await interaction.followup.send(mensagem, ephemeral=True)
+            await interaction.followup.send(mensagem, ephemeral=True) # Estava "followip"
 
     # --- Loop de Verificação (Registo) ---
     @tasks.loop(minutes=3)
