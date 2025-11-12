@@ -7,7 +7,7 @@ import random
 import string
 from datetime import datetime, timedelta
 
-# --- Funções Auxiliares (Copiadas para evitar import circular) ---
+# --- Funções Auxiliares ---
 def gerar_codigo(tamanho=6):
     caracteres = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
     return ''.join(random.choice(caracteres) for _ in range(tamanho))
@@ -50,7 +50,7 @@ class AdminCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # --- FUNÇÃO DE CRIAÇÃO DA DB (ATUALIZADA) ---
+    # --- FUNÇÃO DE CRIAÇÃO DA DB (CORRIGIDA) ---
     async def initialize_database_schema(self):
         try:
             # Tabela de Configuração
@@ -63,10 +63,7 @@ class AdminCog(commands.Cog):
                 );
             """)
             try:
-                await self.bot.db_manager.execute_query("""
-                    ALTER TABLE server_config
-                    ADD COLUMN IF NOT EXISTS recruta_role_id BIGINT;
-                """)
+                await self.bot.db_manager.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS recruta_role_id BIGINT;")
             except Exception: pass
 
             # Tabela de Membros (CORREÇÃO AQUI)
@@ -74,7 +71,7 @@ class AdminCog(commands.Cog):
                 CREATE TABLE IF NOT EXISTS guild_members (
                     discord_id BIGINT PRIMARY KEY, server_id BIGINT, albion_nick TEXT NOT NULL,
                     verification_code TEXT, status TEXT NOT NULL DEFAULT 'pending',
-                    created_at TIMESTAMETZ DEFAULT now() 
+                    created_at TIMESTAMPTZ DEFAULT now() 
                 );
             """)
             
@@ -87,7 +84,7 @@ class AdminCog(commands.Cog):
                     albion_nick TEXT,
                     action TEXT NOT NULL,
                     admin_id BIGINT,
-                    timestamp TIMESTAMETZ DEFAULT now()
+                    timestamp TIMESTAMPTZ DEFAULT now()
                 );
             """)
             
@@ -110,7 +107,7 @@ class AdminCog(commands.Cog):
     # --- Grupo de Comandos ---
     admin = app_commands.Group(name="admin", description="Comandos de administração do O Vigia Bot.")
 
-    # --- (Todos os comandos de setup 1-8 permanecem exatamente iguais) ---
+    # --- (Comandos de Setup 1-8 permanecem exatamente iguais) ---
     @admin.command(name="setup_cargo_admin", description="Passo 1: Define o cargo que pode usar os comandos de admin.")
     @app_commands.checks.has_permissions(administrator=True)
     async def setup_admin_role(self, interaction: discord.Interaction, cargo: discord.Role):
