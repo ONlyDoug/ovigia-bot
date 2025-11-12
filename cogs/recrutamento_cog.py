@@ -29,15 +29,16 @@ async def log_to_channel(bot, guild_id, message, color=None):
 
 # --- Função de Gerar Código (Auxiliar) ---
 def gerar_codigo(tamanho=6):
-    caracteres = string.ascii_uppercase + string.digits
-    return ''.join(random.choice(char for char in caracteres if char not in '0oO1lI') for _ in range(tamanho)) # Evita caracteres confusos
+    # Remove caracteres que geram confusão (0, O, o, 1, l, I)
+    caracteres = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    return ''.join(random.choice(caracteres) for _ in range(tamanho))
 
 class RecrutamentoCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.verificacao_automatica.start()
 
-    # --- Comando /registrar (Lógica do filtro atualizada) ---
+    # --- Comando /registrar (ATUALIZADO) ---
     @app_commands.command(name="registrar", description="Inicia o seu processo de registo na guilda.")
     @app_commands.describe(nick="O seu nick exato no Albion Online.")
     async def registrar(self, interaction: discord.Interaction, nick: str):
@@ -75,36 +76,35 @@ class RecrutamentoCog(commands.Cog):
             )
             return
 
-        # Verificamos se o jogador já está na guilda
-        player_guild_name = player_info.get('GuildName', '')
-        is_already_member = player_guild_name.lower() == config_data.get('guild_name', '').lower()
+        # --- MUDANÇA: O FILTRO DE FAMA AGORA APLICA-SE A TODOS ---
+        total_fame = player_info.get('TotalFame', 0)
+        kill_fame = player_info.get('KillFame', 0)
+        
+        req_total_fame = config_data.get('fame_total', 0)
+        req_kill_fame = config_data.get('fame_pvp', 0)
 
-        # Se NÃO for membro, aplicamos o filtro.
-        if not is_already_member:
-            total_fame = player_info.get('TotalFame', 0)
-            kill_fame = player_info.get('KillFame', 0)
+        if total_fame < req_total_fame or kill_fame < req_kill_fame:
+            # Falhou no filtro. Envia log e mensagem de rejeição.
+            log_msg = (
+                f"❌ **Filtro Falhou**\n"
+                f"Utilizador: {interaction.user.mention} (`{nick}`)\n"
+                f"Fama Total: `{total_fame:,}` (Req: `{req_total_fame:,}`)\n"
+                f"Fama PvP: `{kill_fame:,}` (Req: `{req_kill_fame:,}`)\n"
+                f"*Para aprovar manualmente, use `/admin aprovar_manual`.*"
+            )
+            await log_to_channel(self.bot, interaction.guild.id, log_msg, discord.Color.red())
             
-            req_total_fame = config_data.get('fame_total', 0)
-            req_kill_fame = config_data.get('fame_pvp', 0)
+            await interaction.followup.send(
+                f"Olá, {interaction.user.mention}! Vimos que não cumpre todos os requisitos mínimos:\n\n"
+                f"**Sua Fama Total:** `{total_fame:,}` (Mínimo: `{req_total_fame:,}`)\n"
+                f"**Sua Fama PvP:** `{kill_fame:,}` (Mínimo: `{req_kill_fame:,}`)\n\n"
+                "Continue a jogar e volte a tentar quando atingir os objetivos! "
+                "Se acha que isto é um erro ou se é um caso especial, contacte um Oficial."
+            )
+            return
+        # --- FIM DA MUDANÇA ---
 
-            if total_fame < req_total_fame or kill_fame < req_kill_fame:
-                log_msg = (
-                    f"❌ **Filtro Falhou**\n"
-                    f"Utilizador: {interaction.user.mention} (`{nick}`)\n"
-                    f"Fama Total: `{total_fame:,}` (Req: `{req_total_fame:,}`)\n"
-                    f"Fama PvP: `{kill_fame:,}` (Req: `{req_kill_fame:,}`)"
-                )
-                await log_to_channel(self.bot, interaction.guild.id, log_msg, discord.Color.red())
-                
-                await interaction.followup.send(
-                    f"Olá, {interaction.user.mention}! Vimos que não cumpre todos os requisitos mínimos:\n\n"
-                    f"**Sua Fama Total:** `{total_fame:,}` (Mínimo: `{req_total_fame:,}`)\n"
-                    f"**Sua Fama PvP:** `{kill_fame:,}` (Mínimo: `{req_kill_fame:,}`)\n\n"
-                    "Continue a jogar e volte a tentar quando atingir os objetivos!"
-                )
-                return
-
-        # Sucesso no Filtro (ou filtro ignorado)
+        # 5. Sucesso no Filtro - Gerar código e guardar
         codigo = gerar_codigo()
         await self.bot.db_manager.execute_query(
             "INSERT INTO guild_members (discord_id, server_id, albion_nick, verification_code, status) "
@@ -115,27 +115,25 @@ class RecrutamentoCog(commands.Cog):
             interaction.user.id, interaction.guild.id, nick, codigo
         )
         
-        log_msg_title = "📝 Novo Registo Aceite"
-        embed_title = "✅ Requisitos Atingidos!"
-        if is_already_member:
-            log_msg_title = "📝 Registo de Membro Antigo"
-            embed_title = "👋 Olá, Membro!" # Alterado de "Membro Antigo"
-
         log_msg = (
-            f"**{log_msg_title}**\n"
+            f"📝 **Novo Registo Aceite**\n"
             f"Utilizador: {interaction.user.mention} (`{nick}`)\n"
-            f"Filtro de Fama: {'Ignorado (Já é membro)' if is_already_member else 'OK'}\n"
+            f"Requisitos: OK\n"
             f"Código Gerado: `{codigo}`"
         )
         await log_to_channel(self.bot, interaction.guild.id, log_msg, discord.Color.blue())
 
-        # Enviar instruções
+        # 6. Enviar instruções
         embed = discord.Embed(
-            title=embed_title,
-            description=f"Olá, {interaction.user.mention}! O seu registo para **{nick}** foi aceite. Siga os passos finais:",
+            title="✅ Requisitos Atingidos!",
+            description=f"Parabéns, {interaction.user.mention}! O seu registo para **{nick}** foi aceite. Siga os passos finais:",
             color=discord.Color.green()
         )
         
+        # Verifica se o jogador já está na guilda (apenas para mudar o texto)
+        player_guild_name = player_info.get('GuildName', '')
+        is_already_member = player_guild_name.lower() == config_data.get('guild_name', '').lower()
+
         if is_already_member:
              embed.add_field(name="Passo 1: No Albion", value=(
                 f"Para confirmar que a conta é sua, cole na sua 'Bio' o código: **`{codigo}`**"
@@ -161,7 +159,7 @@ class RecrutamentoCog(commands.Cog):
             fetch="all"
         )
         if not pending_list:
-            logging.info("[Loop de Registo] Nenhum utilizador para verificar.")
+            # logging.info("[Loop de Registo] Nenhum utilizador para verificar.") # Muito spam
             return
 
         logging.info(f"[Loop de Registo] A verificar {len(pending_list)} utilizadores...")
@@ -212,7 +210,7 @@ class RecrutamentoCog(commands.Cog):
                 # SUCESSO!
                 logging.info(f"SUCESSO: {membro.name} ({albion_nick}) verificado.")
                 try:
-                    # --- LÓGICA DE TROCA DE CARGOS (ATUALIZADA) ---
+                    # Lógica de Troca de Cargos
                     cargo_membro = guild.get_role(config_data['role_id'])
                     cargo_recruta_id = config_data.get('recruta_role_id')
                     cargo_recruta = None
@@ -224,14 +222,12 @@ class RecrutamentoCog(commands.Cog):
                         await log_to_channel(self.bot, guild.id, f"❌ ERRO ADMIN: Cargo de Membro ID `{config_data['role_id']}` não encontrado.", discord.Color.dark_red())
                         continue
                         
-                    # Prepara a lista de cargos a adicionar e remover
                     cargos_para_adicionar = [cargo_membro]
                     cargos_para_remover = []
                     
                     if cargo_recruta and cargo_recruta in membro.roles:
                         cargos_para_remover.append(cargo_recruta)
 
-                    # Executa as ações
                     await membro.edit(nick=albion_nick)
                     if cargos_para_adicionar:
                         await membro.add_roles(*cargos_para_adicionar, reason="Verificação de Recrutamento")
