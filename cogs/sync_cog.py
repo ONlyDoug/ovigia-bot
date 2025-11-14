@@ -2,14 +2,13 @@ import discord
 from discord.ext import commands, tasks
 import database as db
 import logging
-from cogs.recrutamento_cog import log_to_channel # Reutilizamos a função de log
+from cogs.recrutamento_cog import log_to_channel 
 
 class SyncCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.limpeza_automatica.start()
 
-    # --- Loop de Limpeza (Sincronização) (ATUALIZADO) ---
     @tasks.loop(minutes=30)
     async def limpeza_automatica(self):
         verified_list = await self.bot.db_manager.execute_query("SELECT * FROM guild_members WHERE status = 'verified'", fetch="all")
@@ -35,7 +34,6 @@ class SyncCog(commands.Cog):
                 await self.bot.db_manager.execute_query("DELETE FROM guild_members WHERE discord_id = $1", user_id)
                 continue
             
-            # --- LÓGICA DE MODO (NOVA) ---
             modo = config_data.get('mode', 'guild')
             target_name = ""
             if modo == 'guild':
@@ -43,22 +41,19 @@ class SyncCog(commands.Cog):
             else: # alliance
                 target_name = config_data.get('alliance_name', '').lower()
             
-            if not target_name: # Se nem guilda nem aliança estiverem definidos
+            if not target_name: 
                 logging.warning(f"Loop de Limpeza: 'target_name' não definido para {guild.name}.")
                 continue
 
-            # API Check
             player_info = await self.bot.albion_client.get_player_info(await self.bot.albion_client.search_player(albion_nick))
             
             player_tag = ""
             if player_info:
-                # Verifica a tag correta baseada no modo
                 if modo == 'guild':
                     player_tag = player_info.get('GuildName', '').lower()
                 else: # alliance
                     player_tag = player_info.get('AllianceName', '').lower()
             
-            # A Lógica de Expulsão (Agora verifica Guilda ou Aliança)
             if not player_info or player_tag != target_name:
                 logging.info(f"REMOÇÃO: {membro.name} ({albion_nick}) não está mais na {modo} '{target_name}'. Expulsando.")
                 

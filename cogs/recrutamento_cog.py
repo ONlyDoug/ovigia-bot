@@ -101,6 +101,7 @@ class ApprovalView(discord.ui.View):
 
             # 1. Definir o cargo a adicionar
             if modo == 'guild':
+                # MODO GUILDA: Só aprova se estiver na guilda principal
                 if not is_in_main_guild:
                     return await interaction.followup.send(f"**Falha na Aprovação!**\nO jogador `{albion_nick}` **não** está na guilda principal (`{main_guild_name}`).\n\nPor favor, aceite-o **dentro do jogo** primeiro e depois clique em 'Aprovar' novamente.", ephemeral=True)
                 
@@ -130,7 +131,7 @@ class ApprovalView(discord.ui.View):
                     else:
                         await log_to_channel(self.bot, interaction.guild.id, f"❌ ERRO ADMIN: Cargo de Aliado ID `{config_data.get('alliance_role_id', 0)}` não encontrado.", discord.Color.dark_red())
                     
-                    # Lógica de Tag Dinâmica
+                    # Lógica de Tag Dinâmica (Opcional, mas poderosa)
                     cargo_guilda_dinamico = discord.utils.get(interaction.guild.roles, name=player_guild_name)
                     if cargo_guilda_dinamico:
                         cargos_para_adicionar.append(cargo_guilda_dinamico)

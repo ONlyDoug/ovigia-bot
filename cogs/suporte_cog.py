@@ -69,7 +69,7 @@ class SuporteCog(commands.Cog):
         try:
             await membro.send(f"Olá! O seu registo para a guilda foi revisto por um staff e **rejeitado**. Motivo: *{motivo}*")
         except discord.Forbidden:
-            pass 
+            pass
             
         await interaction.followup.send(f"✅ O registo de {membro.mention} (`{nick_albion}`) foi rejeitado e removido da fila.")
 

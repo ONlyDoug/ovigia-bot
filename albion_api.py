@@ -5,7 +5,6 @@ API_PLAYER_INFO_URL = "https://gameinfo.albiononline.com/api/gameinfo/players/"
 
 class AlbionAPI:
     def __init__(self):
-        # MUDANÇA: Não criamos a sessão aqui.
         self._session = None
         print("AlbionAPI inicializado (ainda não conectado).")
 
@@ -17,7 +16,6 @@ class AlbionAPI:
 
     async def close(self):
         """Fecha a sessão aiohttp se ela existir."""
-        # MUDANÇA: Verifica se a sessão existe antes de fechar
         if self._session:
             await self._session.close()
             print("Sessão aiohttp (AlbionAPI) fechada.")
@@ -36,10 +34,9 @@ class AlbionAPI:
                     return None
                 data = await resp.json()
                 for player in data.get('players', []):
-                    # Correspondência exata (ignorando maiúsculas/minúsculas)
                     if player.get('Name').lower() == player_name.lower():
                         return player.get('Id')
-                return None # Não encontrou correspondência exata
+                return None
         except Exception as e:
             print(f"Erro ao procurar jogador: {e}")
             return None

@@ -29,16 +29,17 @@ class AdminCog(commands.Cog):
             await self.bot.db_manager.execute_query("""
                 CREATE TABLE IF NOT EXISTS server_config (
                     server_id BIGINT PRIMARY KEY, 
-                    main_guild_name TEXT,     -- Renomeado
-                    main_guild_role_id BIGINT, -- Renomeado
-                    alliance_name TEXT,       -- NOVO
-                    alliance_role_id BIGINT,  -- NOVO
+                    main_guild_name TEXT,
+                    main_guild_role_id BIGINT,
+                    alliance_name TEXT,
+                    alliance_role_id BIGINT,
                     canal_registo_id BIGINT, 
                     canal_logs_id BIGINT,
-                    canal_aprovacao_id BIGINT, -- NOVO
+                    canal_aprovacao_id BIGINT,
                     fame_total BIGINT DEFAULT 0, 
                     fame_pvp BIGINT DEFAULT 0,
-                    recruta_role_id BIGINT
+                    recruta_role_id BIGINT,
+                    mode TEXT DEFAULT 'guild'
                 );
             """)
             # Adiciona colunas (compatibilidade)
@@ -49,6 +50,8 @@ class AdminCog(commands.Cog):
             try: await self.bot.db_manager.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS alliance_role_id BIGINT;")
             except Exception: pass
             try: await self.bot.db_manager.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS canal_aprovacao_id BIGINT;")
+            except Exception: pass
+            try: await self.bot.db_manager.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'guild';")
             except Exception: pass
             # Renomeia colunas antigas (compatibilidade)
             try: await self.bot.db_manager.execute_query("ALTER TABLE server_config RENAME COLUMN guild_name TO main_guild_name;")
@@ -64,7 +67,7 @@ class AdminCog(commands.Cog):
                 );
             """)
 
-            # Tabela de Membros (Removido 'verification_code')
+            # Tabela de Membros
             await self.bot.db_manager.execute_query("""
                 CREATE TABLE IF NOT EXISTS guild_members (
                     discord_id BIGINT PRIMARY KEY, server_id BIGINT, albion_nick TEXT NOT NULL,

@@ -15,7 +15,7 @@ class VigiaBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
         
-        # MUDANÇA: Passa os componentes separados do config
+        # Passa os componentes separados do config
         self.db_manager = DatabaseManager(
             user=config.DB_USER,
             password=config.DB_PASSWORD,
@@ -50,7 +50,7 @@ class VigiaBot(commands.Bot):
             return
 
         # 4. Carregar os outros Cogs
-        cogs_to_load = ['cogs.recrutamento_cog', 'cogs.sync_cog']
+        cogs_to_load = ['cogs.recrutamento_cog', 'cogs.sync_cog', 'cogs.suporte_cog']
         for cog_name in cogs_to_load:
             try:
                 await self.load_extension(cog_name)
@@ -58,9 +58,9 @@ class VigiaBot(commands.Bot):
             except Exception as e:
                 print(f"ERRO ao carregar o cog '{cog_name}': {e}")
 
-        # 5. Sincronizar Comandos de Barra
-        await self.tree.sync()
-        print("Setup_hook concluído.")
+        # 5. Sincronizar Comandos de Barra (Globalmente)
+        #await self.tree.sync()
+        print("Setup_hook concluído. (Sincronização global de comandos desativada, use !sync por servidor)")
 
     async def on_ready(self):
         print(f'Bot ligado como {self.user}')
