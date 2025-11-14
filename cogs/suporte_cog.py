@@ -2,8 +2,8 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import logging
-from utils.permissions import has_permission 
-from cogs.recrutamento_cog import log_to_channel
+from utils.permissions import has_permission # O nosso novo sistema de permissões
+from cogs.recrutamento_cog import log_to_channel # Reutilizamos a função de log
 
 class SuporteCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -31,7 +31,15 @@ class SuporteCog(commands.Cog):
         for item in pending_list:
             membro = interaction.guild.get_member(item['discord_id'])
             timestamp = f"<t:{int(item['created_at'].timestamp())}:R>"
-            descricao += f"• {membro.mention if membro else f'ID: {item['discord_id']}'} - `{item['albion_nick']}` (Registado {timestamp})\n"
+            
+            # --- CORREÇÃO DO BUG (Linha 34) ---
+            if membro:
+                membro_str = membro.mention
+            else:
+                membro_str = f"ID: {item['discord_id']}"
+            
+            descricao += f"• {membro_str} - `{item['albion_nick']}` (Registado {timestamp})\n"
+            # --- FIM DA CORREÇÃO ---
             
         embed.description = descricao
         await interaction.followup.send(embed=embed)
@@ -69,9 +77,10 @@ class SuporteCog(commands.Cog):
         try:
             await membro.send(f"Olá! O seu registo para a guilda foi revisto por um staff e **rejeitado**. Motivo: *{motivo}*")
         except discord.Forbidden:
-            pass 
+            pass
             
         await interaction.followup.send(f"✅ O registo de {membro.mention} (`{nick_albion}`) foi rejeitado e removido da fila.")
 
+# Obrigatório para carregar o Cog
 async def setup(bot):
     await bot.add_cog(SuporteCog(bot))
