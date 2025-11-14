@@ -20,7 +20,7 @@ async def log_to_channel(bot, guild_id, message, color=None):
     except Exception as e: print(f"Erro ao enviar log para o canal: {e}")
 
 
-# --- Nova View de Aprovação (Baseada no Arauto Bot) ---
+# --- View de Aprovação (Botões) ---
 class ApprovalView(discord.ui.View):
     def __init__(self, bot: commands.Bot):
         super().__init__(timeout=None) # Botões persistentes
@@ -99,9 +99,8 @@ class ApprovalView(discord.ui.View):
             cargos_para_remover = []
             log_cargos_add = []
 
-            # 1. Definir o cargo a adicionar
+            # 1. Definir o cargo a adicionar (SÓ PARA MODO GUILDA)
             if modo == 'guild':
-                # MODO GUILDA: Só aprova se estiver na guilda principal
                 if not is_in_main_guild:
                     return await interaction.followup.send(f"**Falha na Aprovação!**\nO jogador `{albion_nick}` **não** está na guilda principal (`{main_guild_name}`).\n\nPor favor, aceite-o **dentro do jogo** primeiro e depois clique em 'Aprovar' novamente.", ephemeral=True)
                 
@@ -111,36 +110,14 @@ class ApprovalView(discord.ui.View):
                     log_cargos_add.append(cargo_membro.mention)
                 else: 
                     await log_to_channel(self.bot, interaction.guild.id, f"❌ ERRO ADMIN: Cargo de Membro (Principal) ID `{config_data['main_guild_role_id']}` não encontrado.", discord.Color.dark_red())
-            
-            else: # MODO ALIANÇA
-                if main_guild_name and is_in_main_guild:
-                    # É da Guilda Principal (exceção)
-                    cargo_principal = interaction.guild.get_role(config_data.get('main_guild_role_id', 0))
-                    if cargo_principal:
-                        cargos_para_adicionar.append(cargo_principal)
-                        log_cargos_add.append(cargo_principal.mention)
-                    else:
-                        await log_to_channel(self.bot, interaction.guild.id, f"⚠️ AVISO: Cargo da Guilda Principal ID `{config_data.get('main_guild_role_id', 0)}` não encontrado.", discord.Color.orange())
-                
-                elif alliance_name and is_in_alliance:
-                    # É de uma Guilda Aliada
-                    cargo_aliado = interaction.guild.get_role(config_data.get('alliance_role_id', 0))
-                    if cargo_aliado:
-                        cargos_para_adicionar.append(cargo_aliado)
-                        log_cargos_add.append(cargo_aliado.mention)
-                    else:
-                        await log_to_channel(self.bot, interaction.guild.id, f"❌ ERRO ADMIN: Cargo de Aliado ID `{config_data.get('alliance_role_id', 0)}` não encontrado.", discord.Color.dark_red())
-                    
-                    # Lógica de Tag Dinâmica (Opcional, mas poderosa)
-                    cargo_guilda_dinamico = discord.utils.get(interaction.guild.roles, name=player_guild_name)
-                    if cargo_guilda_dinamico:
-                        cargos_para_adicionar.append(cargo_guilda_dinamico)
-                        log_cargos_add.append(cargo_guilda_dinamico.mention)
-                    else:
-                         await log_to_channel(self.bot, interaction.guild.id, f"ℹ️ Info: Cargo dinâmico `@`{player_guild_name}` não encontrado para {membro.mention}.", discord.Color.greyple())
-                
-                else:
-                    return await interaction.followup.send(f"**Falha na Aprovação!**\nO jogador `{albion_nick}` **não** está na aliança (`{alliance_name}`).\n\nPeça para ele entrar em uma guilda da aliança primeiro.", ephemeral=True)
+            else:
+                 await log_to_channel(self.bot, interaction.guild.id, f"⚠️ AVISO: O comando /registrar foi usado, mas o bot está em 'Modo Aliança'. Use /alianca_registrar para automação.", discord.Color.orange())
+                 # Se mesmo assim quiser adicionar o cargo principal (para a "galera")
+                 if is_in_main_guild and config_data.get('main_guild_role_id'):
+                     cargo_principal = interaction.guild.get_role(config_data['main_guild_role_id'])
+                     if cargo_principal:
+                         cargos_para_adicionar.append(cargo_principal)
+                         log_cargos_add.append(cargo_principal.mention)
             
             # 2. Cargo de Recruta (Remover)
             if config_data.get('recruta_role_id'):
@@ -187,11 +164,11 @@ class ApprovalView(discord.ui.View):
             await interaction.followup.send(f"Ocorreu um erro inesperado: {e}", ephemeral=True)
 
 
-    @discord.ui.button(label="Aprovar", style=discord.ButtonStyle.success, custom_id="approve_recruit_v2") # ID alterado
+    @discord.ui.button(label="Aprovar", style=discord.ButtonStyle.success, custom_id="approve_recruit_v3") # ID alterado
     async def approve_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_approval(interaction, "approve")
 
-    @discord.ui.button(label="Rejeitar", style=discord.ButtonStyle.danger, custom_id="reject_recruit_v2") # ID alterado
+    @discord.ui.button(label="Rejeitar", style=discord.ButtonStyle.danger, custom_id="reject_recruit_v3") # ID alterado
     async def reject_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self.handle_approval(interaction, "reject")
 
@@ -202,8 +179,7 @@ class RecrutamentoCog(commands.Cog):
         # Adiciona a View persistente
         self.bot.add_view(ApprovalView(bot))
 
-    # --- Comando /registrar (ATUALIZADO) ---
-    @app_commands.command(name="registrar", description="Inicia o seu processo de registo na guilda/aliança.")
+    @app_commands.command(name="registrar", description="Inicia o seu processo de registo na GUILDA.")
     @app_commands.describe(nick="O seu nick exato no Albion Online.")
     async def registrar(self, interaction: discord.Interaction, nick: str):
         config_data = await self.bot.db_manager.execute_query("SELECT * FROM server_config WHERE server_id = $1", interaction.guild.id, fetch="one")
@@ -214,12 +190,14 @@ class RecrutamentoCog(commands.Cog):
             canal_correto = interaction.guild.get_channel(config_data['canal_registo_id'])
             return await interaction.response.send_message(f"Por favor, use este comando no canal {canal_correto.mention}.", ephemeral=True)
 
+        # Se o bot estiver em Modo Aliança, avisa o utilizador para usar o comando /alianca
+        modo = config_data.get('mode', 'guild')
+        if modo == 'alliance':
+            return await interaction.response.send_message("Este servidor está em **Modo Aliança**. Por favor, use o comando `/alianca_registrar`.", ephemeral=True)
+
         await interaction.response.defer(ephemeral=True)
         
-        player_info = await self.bot.albion_client.get_player_info(
-            await self.bot.albion_client.search_player(nick)
-        )
-
+        player_info = await self.bot.albion_client.get_player_info(await self.bot.albion_client.search_player(nick))
         if not player_info:
             await log_to_channel(self.bot, interaction.guild.id, f"⚠️ Tentativa de registo falhou: Nick `{nick}` não encontrado (Utilizador: {interaction.user.mention}).")
             await interaction.followup.send(f"Não encontrei o jogador **{nick}**. Verifique o nome e tente novamente.")
@@ -232,13 +210,12 @@ class RecrutamentoCog(commands.Cog):
             if existing_member['status'] == 'verified':
                 return await interaction.followup.send("Você já está verificado neste servidor.")
 
-        modo = config_data.get('mode', 'guild')
         guild_name = config_data.get('main_guild_name', '')
-        
         player_guild_name = player_info.get('GuildName', '')
         is_already_member = player_guild_name.lower() == guild_name.lower()
         
-        if modo == 'guild' and not is_already_member:
+        # --- LÓGICA DE FILTRO (Apenas Modo Guilda) ---
+        if not is_already_member:
             pve_data = player_info.get('PvE', {})
             total_fame = pve_data.get('Total', 0) 
             kill_fame = player_info.get('KillFame', 0)
@@ -263,8 +240,7 @@ class RecrutamentoCog(commands.Cog):
                 )
                 return
         
-        # --- SUCESSO NO FILTRO (ou Modo Aliança, ou Membro Antigo) ---
-        
+        # --- SUCESSO NO FILTRO (ou Membro Antigo) ---
         await self.bot.db_manager.execute_query(
             "INSERT INTO guild_members (discord_id, server_id, albion_nick, status) VALUES ($1, $2, $3, 'pending') "
             "ON CONFLICT (discord_id) DO UPDATE SET "
@@ -305,14 +281,11 @@ class RecrutamentoCog(commands.Cog):
             logging.error(f"Canal de aprovações (ID: {config_data['canal_aprovacao_id']}) não encontrado!")
 
         # Envia DM/Resposta ao utilizador
-        msg_final = f"✅ **Aplicação Recebida!**\nO seu registo para `{nick}` foi enviado para a nossa equipa de Suporte.\n**Próximo Passo:** Por favor, aplique para a guilda **dentro do jogo** (se ainda não o fez) e aguarde a aprovação."
+        msg_final = f"✅ **Aplicação Recebida!**\nO seu registo para `{nick}` foi enviado para a nossa equipa de Suporte.\n**Próximo Passo:** Por favor, aplique para a guilda **dentro do jogo** e aguarde a aprovação."
         if is_already_member:
-            msg_final = f"👋 **Olá, Membro!**\nRecebemos o seu pedido para sincronizar a conta `{nick}`.\nUma notificação foi enviada à equipa de Suporte para confirmar e atualizar o seu nick/cargos. Isto deve ser rápido!"
+            msg_final = f"👋 **Olá, Membro!**\nRecebemos o seu pedido para sincronizar a conta `{nick}`.\nUma notificação foi enviada à equipa de Suporte para confirmar e atualizar o seu nick/cargos."
         
         await interaction.followup.send(msg_final, ephemeral=True)
-
-
-    # --- REMOVEMOS O LOOP AUTOMÁTICO E O /verificar ---
 
 async def setup(bot):
     await bot.add_cog(RecrutamentoCog(bot))

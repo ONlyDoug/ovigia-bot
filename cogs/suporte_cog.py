@@ -2,8 +2,8 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import logging
-from utils.permissions import has_permission # O nosso novo sistema de permissões
-from cogs.recrutamento_cog import log_to_channel # Reutilizamos a função de log
+from utils.permissions import has_permission 
+from cogs.recrutamento_cog import log_to_channel
 
 class SuporteCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -69,10 +69,9 @@ class SuporteCog(commands.Cog):
         try:
             await membro.send(f"Olá! O seu registo para a guilda foi revisto por um staff e **rejeitado**. Motivo: *{motivo}*")
         except discord.Forbidden:
-            pass
+            pass 
             
         await interaction.followup.send(f"✅ O registo de {membro.mention} (`{nick_albion}`) foi rejeitado e removido da fila.")
 
-# Obrigatório para carregar o Cog
 async def setup(bot):
     await bot.add_cog(SuporteCog(bot))

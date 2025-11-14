@@ -22,27 +22,18 @@ class AdminCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # --- FUNÇÃO DE CRIAÇÃO DA DB (ATUALIZADA) ---
+    # --- FUNÇÃO DE CRIAÇÃO DA DB (CORRIGIDA) ---
     async def initialize_database_schema(self):
         try:
-            # Tabela de Configuração
             await self.bot.db_manager.execute_query("""
                 CREATE TABLE IF NOT EXISTS server_config (
-                    server_id BIGINT PRIMARY KEY, 
-                    main_guild_name TEXT,
-                    main_guild_role_id BIGINT,
-                    alliance_name TEXT,
-                    alliance_role_id BIGINT,
-                    canal_registo_id BIGINT, 
-                    canal_logs_id BIGINT,
-                    canal_aprovacao_id BIGINT,
-                    fame_total BIGINT DEFAULT 0, 
-                    fame_pvp BIGINT DEFAULT 0,
-                    recruta_role_id BIGINT,
-                    mode TEXT DEFAULT 'guild'
+                    server_id BIGINT PRIMARY KEY, main_guild_name TEXT, main_guild_role_id BIGINT,
+                    alliance_name TEXT, alliance_role_id BIGINT,
+                    canal_registo_id BIGINT, canal_logs_id BIGINT, canal_aprovacao_id BIGINT,
+                    fame_total BIGINT DEFAULT 0, fame_pvp BIGINT DEFAULT 0,
+                    recruta_role_id BIGINT, mode TEXT DEFAULT 'guild'
                 );
             """)
-            # Adiciona colunas (compatibilidade)
             try: await self.bot.db_manager.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS recruta_role_id BIGINT;")
             except Exception: pass
             try: await self.bot.db_manager.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS alliance_name TEXT;")
@@ -53,21 +44,18 @@ class AdminCog(commands.Cog):
             except Exception: pass
             try: await self.bot.db_manager.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'guild';")
             except Exception: pass
-            # Renomeia colunas antigas (compatibilidade)
             try: await self.bot.db_manager.execute_query("ALTER TABLE server_config RENAME COLUMN guild_name TO main_guild_name;")
             except Exception: pass
             try: await self.bot.db_manager.execute_query("ALTER TABLE server_config RENAME COLUMN role_id TO main_guild_role_id;")
             except Exception: pass
             
-            # Tabela de Permissões
             await self.bot.db_manager.execute_query("""
                 CREATE TABLE IF NOT EXISTS server_config_permissoes (
-                    server_id BIGINT, chave TEXT, valor TEXT,
-                    PRIMARY KEY (server_id, chave)
+                    server_id BIGINT, chave TEXT, valor TEXT, PRIMARY KEY (server_id, chave)
                 );
             """)
 
-            # Tabela de Membros
+            # Tabela de Membros (CORREÇÃO AQUI)
             await self.bot.db_manager.execute_query("""
                 CREATE TABLE IF NOT EXISTS guild_members (
                     discord_id BIGINT PRIMARY KEY, server_id BIGINT, albion_nick TEXT NOT NULL,
@@ -78,7 +66,7 @@ class AdminCog(commands.Cog):
             try: await self.bot.db_manager.execute_query("ALTER TABLE guild_members DROP COLUMN IF EXISTS verification_code;")
             except Exception: pass
             
-            # Tabela de Logs
+            # Tabela de Logs (CORREÇÃO AQUI)
             await self.bot.db_manager.execute_query("""
                 CREATE TABLE IF NOT EXISTS recruitment_log (
                     id SERIAL PRIMARY KEY, server_id BIGINT, discord_id BIGINT,
@@ -113,11 +101,7 @@ class AdminCog(commands.Cog):
         if not role_ids:
             return await interaction.response.send_message("Nenhum cargo válido mencionado.", ephemeral=True)
         ids_str = ",".join(str(rid) for rid in role_ids)
-        await self.bot.db_manager.execute_query(
-            "INSERT INTO server_config_permissoes (server_id, chave, valor) VALUES ($1, $2, $3) "
-            "ON CONFLICT (server_id, chave) DO UPDATE SET valor = $3",
-            interaction.guild.id, f"perm_nivel_{nivel}", ids_str
-        )
+        await self.bot.db_manager.execute_query("INSERT INTO server_config_permissoes (server_id, chave, valor) VALUES ($1, $2, $3) ON CONFLICT (server_id, chave) DO UPDATE SET valor = $3", interaction.guild.id, f"perm_nivel_{nivel}", ids_str)
         await interaction.response.send_message(f"✅ **Permissões de Nível {nivel} definidas!**\n**Próximo Passo:** Use `/admin criar_estrutura`.", ephemeral=True)
 
     @admin.command(name="criar_estrutura", description="Passo 2: Cria os canais de recrutamento.")
