@@ -20,7 +20,6 @@ class AliancaCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    # --- MUDANÇA AQUI ---
     @app_commands.command(name="aplicar_alianca", description="Verifica 100% automático se você está na aliança.")
     @app_commands.describe(nick="O seu nick exato no Albion Online.")
     async def aplicar_alianca(self, interaction: discord.Interaction, nick: str):

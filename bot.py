@@ -42,9 +42,9 @@ class VigiaBot(commands.Bot):
                 raise Exception("Não foi possível obter o AdminCog.")
         except Exception as e:
             print(f"ERRO CRÍTICO ao carregar/inicializar o AdminCog: {e}")
-            return
-
-        # 4. Carregar os outros Cogs (NOVO COG ADICIONADO)
+            # Não retornamos, para que possamos ver os erros dos outros cogs se houver
+            
+        # 4. Carregar os outros Cogs (LISTA CORRIGIDA)
         cogs_to_load = ['cogs.recrutamento_cog', 'cogs.sync_cog', 'cogs.suporte_cog', 'cogs.alianca_cog']
         
         for cog_name in cogs_to_load:
