@@ -5,8 +5,9 @@ import database as db
 import random
 import string
 import logging
+from utils.permissions import has_permission
 
-# --- Função de Log (Auxiliar) ---
+# --- Funções Auxiliares (Não mudam) ---
 async def log_to_channel(bot, guild_id, message, color=None):
     try:
         config_data = await bot.db_manager.execute_query("SELECT canal_logs_id FROM server_config WHERE server_id = $1", guild_id, fetch="one")
@@ -17,89 +18,169 @@ async def log_to_channel(bot, guild_id, message, color=None):
             else: await log_channel.send(message)
     except Exception as e: print(f"Erro ao enviar log para o canal: {e}")
 
-# --- Função de Gerar Código (Auxiliar) ---
-def gerar_codigo(tamanho=6):
-    caracteres = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    return ''.join(random.choice(caracteres) for _ in range(tamanho))
+# --- Nova View de Aprovação (Baseada no Arauto Bot) ---
+class ApprovalView(discord.ui.View):
+    def __init__(self, bot: commands.Bot):
+        super().__init__(timeout=None) # Botões persistentes
+        self.bot = bot
 
-# --- LÓGICA DE VERIFICAÇÃO (SEPARADA) ---
-async def verificar_membro(bot, config_data, membro: discord.Member, user_data: dict):
-    guild = membro.guild
-    albion_nick = user_data['albion_nick']
-    codigo_esperado = user_data['verification_code']
+    async def handle_approval(self, interaction: discord.Interaction, action: str):
+        # Apenas staff Nível 1+ pode clicar
+        if not await has_permission(1).predicate(interaction): return
 
-    player_info = await bot.albion_client.get_player_info(await bot.albion_client.search_player(albion_nick))
-    if not player_info:
-        logging.warning(f"Falha ao obter info de {albion_nick} (ID: {membro.id}).")
-        return (False, "Não foi possível encontrar a sua conta Albion. Tente usar `/registrar` novamente.")
+        await interaction.response.defer() # Reconhece o clique
+
+        # 1. Obter dados da DB
+        user_data = await self.bot.db_manager.execute_query(
+            "SELECT * FROM guild_members WHERE discord_id = $1",
+            int(interaction.message.embeds[0].footer.text.split("ID: ")[1]), # Puxa o ID do rodapé
+            fetch="one"
+        )
         
-    player_bio = player_info.get('About', '')
-    player_guild = player_info.get('GuildName', '')
+        if not user_data or user_data['status'] == 'verified':
+            embed = interaction.message.embeds[0]
+            embed.title = "Ação já processada"
+            embed.color = discord.Color.greyple()
+            for item in self.children: item.disabled = True
+            await interaction.edit_original_message(embed=embed, view=self)
+            return
 
-    bio_ok = codigo_esperado in player_bio
-    guild_ok = player_guild.lower() == config_data['guild_name'].lower()
+        config_data = await self.bot.db_manager.execute_query("SELECT * FROM server_config WHERE server_id = $1", interaction.guild.id, fetch="one")
+        membro = interaction.guild.get_member(user_data['discord_id'])
+        albion_nick = user_data['albion_nick']
 
-    if bio_ok and guild_ok:
-        # SUCESSO!
-        logging.info(f"SUCESSO: {membro.name} ({albion_nick}) verificado.")
-        try:
-            cargo_membro = guild.get_role(config_data['role_id'])
-            cargo_recruta = None
-            if config_data.get('recruta_role_id'):
-                cargo_recruta = guild.get_role(config_data['recruta_role_id'])
+        if not membro:
+            await log_to_channel(self.bot, interaction.guild.id, f"❌ Falha na aprovação: Membro <@{user_data['discord_id']}> (`{albion_nick}`) não está no servidor.", discord.Color.red())
+            await self.bot.db_manager.execute_query("DELETE FROM guild_members WHERE discord_id = $1", user_data['discord_id'])
+            return await interaction.followup.send(f"Erro: O membro <@{user_data['discord_id']}> saiu do servidor. Registo apagado.", ephemeral=True)
 
-            if not cargo_membro:
-                await log_to_channel(bot, guild.id, f"❌ ERRO ADMIN: Cargo de Membro ID `{config_data['role_id']}` não encontrado.", discord.Color.dark_red())
-                return (False, "Erro de configuração do servidor (Admin foi notificado).")
-                
-            cargos_para_adicionar = [cargo_membro]
-            cargos_para_remover = []
-            if cargo_recruta and cargo_recruta in membro.roles:
-                cargos_para_remover.append(cargo_recruta)
-
-            await membro.edit(nick=albion_nick)
-            if cargos_para_adicionar: await membro.add_roles(*cargos_para_adicionar, reason="Verificação de Recrutamento")
-            if cargos_para_remover: await membro.remove_roles(*cargos_para_remover, reason="Verificação de Recrutamento")
+        # --- AÇÃO: REJEITAR ---
+        if action == 'reject':
+            await self.bot.db_manager.execute_query("DELETE FROM guild_members WHERE discord_id = $1", membro.id)
+            await self.bot.db_manager.execute_query("INSERT INTO recruitment_log (server_id, discord_id, albion_nick, action, admin_id) VALUES ($1, $2, $3, 'rejected_manual', $4)", interaction.guild.id, membro.id, albion_nick, interaction.user.id)
             
-            await log_to_channel(bot, guild.id,
-                f"✅ **Verificado!** {membro.mention} (`{albion_nick}`) foi promovido.\n"
-                f"**Adicionado:** {cargo_membro.mention}\n"
-                f"**Removido:** {cargo_recruta.mention if cargo_recruta else 'Nenhum'}",
+            embed = interaction.message.embeds[0]
+            embed.title = "❌ Aplicação REJEITADA"
+            embed.color = discord.Color.red()
+            embed.set_footer(text=f"Rejeitado por: {interaction.user.display_name}")
+            for item in self.children: item.disabled = True
+            await interaction.edit_original_message(embed=embed, view=self)
+            
+            try: await membro.send(f"Olá! A sua aplicação para a guilda foi revista pela nossa equipa de Suporte e **rejeitada**. Contacte um recrutador se achar que isto foi um erro.")
+            except discord.Forbidden: pass
+            return
+
+        # --- AÇÃO: APROVAR ---
+        # Verificação final (cache-free)
+        player_info = await self.bot.albion_client.get_player_info(await self.bot.albion_client.search_player(albion_nick))
+        
+        if not player_info:
+            return await interaction.followup.send(f"Falha na aprovação: Não consigo encontrar o jogador `{albion_nick}` na API. Ele pode ter mudado de nome.", ephemeral=True)
+
+        player_guild = player_info.get('GuildName', '')
+        player_alliance = player_info.get('AllianceName', '')
+        modo = config_data.get('mode', 'guild')
+
+        # Verifica se o jogador está na guilda (Modo Guilda) ou aliança (Modo Aliança)
+        is_in_target = False
+        if modo == 'guild' and player_guild.lower() == config_data.get('guild_name', '').lower():
+            is_in_target = True
+        elif modo == 'alliance' and player_alliance.lower() == config_data.get('alliance_name', '').lower():
+            is_in_target = True
+
+        if not is_in_target:
+            target_name = config_data.get('alliance_name') if modo == 'alliance' else config_data.get('guild_name')
+            return await interaction.followup.send(f"**Falha na Aprovação!**\nO jogador `{albion_nick}` **não** está na aliança/guilda (`{target_name}`).\n\nPor favor, aceite-o **dentro do jogo** primeiro e depois clique em 'Aprovar' novamente.", ephemeral=True)
+
+        # --- SUCESSO NA APROVAÇÃO ---
+        try:
+            cargos_para_adicionar = []
+            cargos_para_remover = []
+            log_cargos_add = []
+
+            # 1. Cargo de Membro (Modo Guilda) ou Cargo Dinâmico (Modo Aliança)
+            if modo == 'guild':
+                cargo_membro = interaction.guild.get_role(config_data['role_id'])
+                if cargo_membro: 
+                    cargos_para_adicionar.append(cargo_membro)
+                    log_cargos_add.append(cargo_membro.mention)
+                else: 
+                    await log_to_channel(self.bot, interaction.guild.id, f"❌ ERRO ADMIN: Cargo de Membro ID `{config_data['role_id']}` não encontrado.", discord.Color.dark_red())
+            else: # Modo Aliança
+                guild_role_name = player_info.get('GuildName')
+                cargo_guilda = discord.utils.get(interaction.guild.roles, name=guild_role_name)
+                if cargo_guilda:
+                    cargos_para_adicionar.append(cargo_guilda)
+                    log_cargos_add.append(cargo_guilda.mention)
+                else:
+                    await log_to_channel(self.bot, interaction.guild.id, f"⚠️ AVISO: Aprovado `{albion_nick}`, mas o cargo `@`{guild_role_name}` não existe no Discord.", discord.Color.orange())
+            
+            # 2. Cargo de Recruta (Remover)
+            if config_data.get('recruta_role_id'):
+                cargo_recruta = interaction.guild.get_role(config_data['recruta_role_id'])
+                if cargo_recruta and cargo_recruta in membro.roles:
+                    cargos_para_remover.append(cargo_recruta)
+
+            # 3. Executar Ações
+            await membro.edit(nick=albion_nick)
+            if cargos_para_adicionar: await membro.add_roles(*cargos_para_adicionar, reason=f"Aprovado por {interaction.user.name}")
+            if cargos_para_remover: await membro.remove_roles(*cargos_para_remover, reason=f"Aprovado por {interaction.user.name}")
+            
+            # 4. Atualizar DB
+            await self.bot.db_manager.execute_query("UPDATE guild_members SET status = 'verified' WHERE discord_id = $1", membro.id)
+            await self.bot.db_manager.execute_query("INSERT INTO recruitment_log (server_id, discord_id, albion_nick, action, admin_id) VALUES ($1, $2, $3, 'approved_manual', $4)", interaction.guild.id, membro.id, albion_nick, interaction.user.id)
+            
+            # 5. Atualizar Mensagem (Log e Embed)
+            log_cargos_rem = cargo_recruta.mention if cargo_recruta and cargos_para_remover else 'Nenhum'
+            await log_to_channel(self.bot, interaction.guild.id,
+                f"✅ **Aprovado Manualmente!**\n"
+                f"**Staff:** {interaction.user.mention}\n"
+                f"**Membro:** {membro.mention} (`{albion_nick}`)\n"
+                f"**Adicionado:** {', '.join(log_cargos_add)}\n"
+                f"**Removido:** {log_cargos_rem}",
                 discord.Color.green()
             )
             
-            await bot.db_manager.execute_query("INSERT INTO recruitment_log (server_id, discord_id, albion_nick, action) VALUES ($1, $2, $3, 'verified_auto')", guild.id, membro.id, albion_nick)
-            await bot.db_manager.execute_query("UPDATE guild_members SET status = 'verified', verification_code = NULL WHERE discord_id = $1", membro.id)
-            return (True, f"**Bem-vindo(a) à {guild.name}, {membro.mention}!**\n\nA sua conta `{albion_nick}` foi verificada com sucesso. O seu nick e cargos foram atualizados.")
+            embed = interaction.message.embeds[0]
+            embed.title = "✅ Aplicação APROVADA"
+            embed.color = discord.Color.green()
+            embed.set_footer(text=f"Aprovado por: {interaction.user.display_name}")
+            for item in self.children: item.disabled = True
+            await interaction.edit_original_message(embed=embed, view=self)
+
+            try: await membro.send(f"🎉 **Bem-vindo(a)!** A sua aplicação foi **aprovada** pela nossa equipa de Suporte. O seu nick e cargos foram atualizados.")
+            except discord.Forbidden: pass
 
         except discord.Forbidden:
-            await log_to_channel(bot, guild.id, f"❌ ERRO ADMIN: Não tenho permissão para dar/remover cargos ou mudar o nick de {membro.mention}.", discord.Color.dark_red())
-            return (False, "Erro: Não tenho permissão para alterar os seus cargos ou nick. (Admin foi notificado).")
+            await log_to_channel(self.bot, interaction.guild.id, f"❌ ERRO ADMIN: Tentei aprovar {membro.mention}, mas não tenho permissão para alterar cargos ou nicks.", discord.Color.dark_red())
+            await interaction.followup.send("Erro: Não tenho permissão para alterar os cargos ou nick deste membro.", ephemeral=True)
         except Exception as e:
-            logging.error(f"Erro ao promover {membro.name}: {e}")
-            return (False, "Ocorreu um erro inesperado ao tentar promovê-lo.")
-    else:
-        # Falha na verificação
-        if not bio_ok:
-            logging.info(f"Falha na verificação (Bio): {membro.name} ({albion_nick})")
-            return (False, f"Não encontrei o código `{codigo_esperado}` na sua bio do Albion. Por favor, verifique se o copiou corretamente e tente novamente.")
-        else: # not guild_ok
-            logging.info(f"Falha na verificação (Guilda): {membro.name} ({albion_nick})")
-            return (False, f"Ainda não o detectámos na guilda **{config_data['guild_name']}**. Por favor, aguarde que um oficial o aceite no jogo e tente novamente.")
+            logging.error(f"Erro ao aprovar {membro.name}: {e}")
+            await interaction.followup.send(f"Ocorreu um erro inesperado: {e}", ephemeral=True)
+
+
+    @discord.ui.button(label="Aprovar", style=discord.ButtonStyle.success, custom_id="approve_recruit")
+    async def approve_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_approval(interaction, "approve")
+
+    @discord.ui.button(label="Rejeitar", style=discord.ButtonStyle.danger, custom_id="reject_recruit")
+    async def reject_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_approval(interaction, "reject")
 
 
 class RecrutamentoCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.verificacao_automatica.start()
+        # Adiciona a View persistente
+        self.bot.add_view(ApprovalView(bot))
 
-    # --- Comando /registrar (Lógica do filtro de Fama corrigida) ---
-    @app_commands.command(name="registrar", description="Inicia o seu processo de registo na guilda.")
+    # --- Comando /registrar (ATUALIZADO) ---
+    @app_commands.command(name="registrar", description="Inicia o seu processo de registo na guilda/aliança.")
     @app_commands.describe(nick="O seu nick exato no Albion Online.")
     async def registrar(self, interaction: discord.Interaction, nick: str):
         config_data = await self.bot.db_manager.execute_query("SELECT * FROM server_config WHERE server_id = $1", interaction.guild.id, fetch="one")
         
-        if not all([config_data, config_data.get('canal_registo_id'), config_data.get('guild_name'), config_data.get('role_id')]):
+        if not all([config_data, config_data.get('canal_registo_id'), config_data.get('canal_aprovacao_id')]):
             return await interaction.response.send_message("O bot ainda não foi totalmente configurado por um admin.", ephemeral=True)
         if interaction.channel.id != config_data['canal_registo_id']:
             canal_correto = interaction.guild.get_channel(config_data['canal_registo_id'])
@@ -116,15 +197,21 @@ class RecrutamentoCog(commands.Cog):
             await interaction.followup.send(f"Não encontrei o jogador **{nick}**. Verifique o nome e tente novamente.")
             return
 
-        # --- LÓGICA DE BYPASS E "ANÁLISE MANUAL" ---
-        player_guild_name = player_info.get('GuildName', '')
-        is_already_member = player_guild_name.lower() == config_data.get('guild_name', '').lower()
+        modo = config_data.get('mode', 'guild')
+        guild_name = config_data.get('guild_name', '')
+        alliance_name = config_data.get('alliance_name', '')
         
-        log_msg_title = "📝 Novo Registo Aceite"
-        embed_title = "✅ Requisitos Atingidos!"
-        log_filtro = "OK"
+        player_guild_name = player_info.get('GuildName', '')
+        player_alliance_name = player_info.get('AllianceName', '')
+        
+        is_already_member = False
+        if modo == 'guild' and player_guild_name.lower() == guild_name.lower():
+            is_already_member = True
+        elif modo == 'alliance' and player_alliance_name.lower() == alliance_name.lower():
+            is_already_member = True
 
-        if not is_already_member:
+        # --- LÓGICA DE FILTRO (Apenas Modo Guilda) ---
+        if modo == 'guild' and not is_already_member:
             pve_data = player_info.get('PvE', {})
             total_fame = pve_data.get('Total', 0) 
             kill_fame = player_info.get('KillFame', 0)
@@ -133,95 +220,91 @@ class RecrutamentoCog(commands.Cog):
 
             if total_fame < req_total_fame or kill_fame < req_kill_fame:
                 log_msg = (
-                    f"⚠️ **Filtro Falhou (Análise Manual)**\n"
+                    f"❌ **Filtro Falhou**\n"
                     f"Utilizador: {interaction.user.mention} (`{nick}`)\n"
                     f"Fama Total: `{total_fame:,}` (Req: `{req_total_fame:,}`)\n"
                     f"Fama PvP: `{kill_fame:,}` (Req: `{req_kill_fame:,}`)"
                 )
-                await log_to_channel(self.bot, interaction.guild.id, log_msg, discord.Color.orange())
-                await self.bot.db_manager.execute_query("INSERT INTO recruitment_log (server_id, discord_id, albion_nick, action) VALUES ($1, $2, $3, 'filtered')", interaction.guild.id, interaction.user.id, nick)
-                log_filtro = "FALHOU (Pendente Manual)"
-                embed_title = "⚠️ Análise Manual Pendente"
-        else:
-            log_msg_title = "📝 Registo de Membro Antigo"
-            embed_title = "👋 Olá, Membro!"
-            log_filtro = "Ignorado (Já é membro)"
-
-        # 5. Sucesso (ou bypass) - Gerar código e guardar
-        codigo = gerar_codigo()
+                await log_to_channel(self.bot, interaction.guild.id, log_msg, discord.Color.red())
+                await self.bot.db_manager.execute_query("INSERT INTO recruitment_log (server_id, discord_id, albion_nick, action) VALUES ($1, $2, $3, 'filtered_low_fame')", interaction.guild.id, interaction.user.id, nick)
+                
+                await interaction.followup.send(
+                    f"Olá, {interaction.user.mention}! Vimos que não cumpre todos os requisitos mínimos:\n\n"
+                    f"**Sua Fama Total:** `{total_fame:,}` (Mínimo: `{req_total_fame:,}`)\n"
+                    f"**Sua Fama PvP:** `{kill_fame:,}` (Mínimo: `{req_kill_fame:,}`)\n\n"
+                    "Contacte um Oficial se for um caso especial."
+                )
+                return
+        
+        # --- SUCESSO NO FILTRO (ou Modo Aliança, ou Membro Antigo) ---
+        
+        # 1. Salva o membro na DB (agora sem código)
         await self.bot.db_manager.execute_query(
-            "INSERT INTO guild_members (discord_id, server_id, albion_nick, verification_code, status) VALUES ($1, $2, $3, $4, 'pending') "
+            "INSERT INTO guild_members (discord_id, server_id, albion_nick, status) VALUES ($1, $2, $3, 'pending') "
             "ON CONFLICT (discord_id) DO UPDATE SET "
-            "server_id = EXCLUDED.server_id, albion_nick = EXCLUDED.albion_nick, "
-            "verification_code = EXCLUDED.verification_code, status = 'pending'",
-            interaction.user.id, interaction.guild.id, nick, codigo
+            "server_id = EXCLUDED.server_id, albion_nick = EXCLUDED.albion_nick, status = 'pending'",
+            interaction.user.id, interaction.guild.id, nick
         )
         
-        log_msg = (
+        # 2. Prepara o log e o "Cartão de Aplicação"
+        pve_fame = player_info.get('PvE', {}).get('Total', 0)
+        pvp_fame = player_info.get('KillFame', 0)
+
+        log_msg_title = "📝 Nova Aplicação Recebida"
+        if is_already_member:
+            log_msg_title = "📝 Sincronização de Membro Antigo"
+        
+        await log_to_channel(self.bot, interaction.guild.id, 
             f"**{log_msg_title}**\n"
             f"Utilizador: {interaction.user.mention} (`{nick}`)\n"
-            f"Filtro de Fama: **{log_filtro}**\n"
-            f"Código Gerado: `{codigo}`"
+            f"Filtro: {'Ignorado (Já é membro)' if is_already_member else 'OK'}\n"
+            f"Fama: `PvE: {pve_fame:,} | PvP: {pvp_fame:,}`\n"
+            f"**Aguardando aprovação da equipa de Suporte...**",
+            discord.Color.blue()
         )
-        await log_to_channel(self.bot, interaction.guild.id, log_msg, discord.Color.blue())
         await self.bot.db_manager.execute_query("INSERT INTO recruitment_log (server_id, discord_id, albion_nick, action) VALUES ($1, $2, $3, 'registered')", interaction.guild.id, interaction.user.id, nick)
 
-        # 6. Enviar instruções (Embed)
-        embed = discord.Embed(title=embed_title, description=f"Olá, {interaction.user.mention}! O seu registo para **{nick}** foi aceite. Siga os passos finais:", color=discord.Color.green())
+        # 3. Envia o cartão para o canal #⏳-aprovações
+        canal_aprovacao = self.bot.get_channel(config_data['canal_aprovacao_id'])
+        if canal_aprovacao:
+            embed_aprovacao = discord.Embed(
+                title="⏳ Nova Aplicação (PENDENTE)",
+                color=discord.Color.orange(),
+                timestamp=datetime.utcnow()
+            )
+            embed_aprovacao.add_field(name="Discord", value=interaction.user.mention, inline=True)
+            embed_aprovacao.add_field(name="Albion Nick", value=nick, inline=True)
+            embed_aprovacao.add_field(name="Status no Jogo", value=f"Guilda: `{player_guild_name or 'N/A'}`\nAliança: `{player_alliance_name or 'N/A'}`", inline=False)
+            embed_aprovacao.add_field(name="Fama PvE Total", value=f"`{pve_fame:,}`", inline=True)
+            embed_aprovacao.add_field(name="Fama PvP Total", value=f"`{pvp_fame:,}`", inline=True)
+            embed_aprovacao.set_thumbnail(url=interaction.user.display_avatar.url)
+            embed_aprovacao.set_footer(text=f"ID do Utilizador: {interaction.user.id}")
+            
+            await canal_aprovacao.send(embed=embed_aprovacao, view=ApprovalView(self.bot))
+        else:
+            logging.error(f"Canal de aprovações (ID: {config_data['canal_aprovacao_id']}) não encontrado!")
+
+        # 4. Envia DM/Resposta ao utilizador
         if is_already_member:
-             embed.add_field(name="Passo 1: No Albion", value=(f"Para confirmar que a conta é sua, cole na sua 'Bio' o código: **`{codigo}`**"), inline=False)
+            await interaction.followup.send(
+                f"👋 **Olá, Membro!**\n"
+                f"Recebemos o seu pedido para sincronizar a conta `{nick}`.\n"
+                f"Uma notificação foi enviada à equipa de Suporte para confirmar e atualizar o seu nick/cargos. Isto deve ser rápido!",
+                ephemeral=True
+            )
         else:
-            embed.add_field(name="Passo 1: No Albion", value=(f"1. Aplique para: **{config_data['guild_name']}**\n2. Cole na sua 'Bio' o código: **`{codigo}`**"), inline=False)
-        embed.add_field(name="Passo 2: Aguardar", value=(f"É tudo! O bot irá verificar automaticamente.\n**Para acelerar, use `/verificar`** assim que estiver pronto."), inline=False)
-        if log_filtro.startswith("FALHOU"):
-             embed.set_footer(text="Nota: A sua fama está abaixo dos requisitos. A sua verificação será concluída, mas um oficial irá rever o seu caso.")
-        await interaction.followup.send(embed=embed)
+            await interaction.followup.send(
+                f"✅ **Aplicação Recebida!**\n"
+                f"O seu registo para `{nick}` foi enviado para a nossa equipa de Suporte.\n"
+                f"**Próximo Passo:** Por favor, aplique para a guilda **dentro do jogo** e aguarde a aprovação.\n\n*(Não precisa de colocar nenhum código na bio)*",
+                ephemeral=True
+            )
 
-    # --- COMANDO /verificar (CORRIGIDO) ---
-    @app_commands.command(name="verificar", description="Tenta verificar manualmente a sua conta após colocar o código na bio.")
-    async def verificar(self, interaction: discord.Interaction):
-        config_data = await self.bot.db_manager.execute_query("SELECT * FROM server_config WHERE server_id = $1", interaction.guild.id, fetch="one")
-        if not config_data or interaction.channel.id != config_data.get('canal_registo_id'):
-            return await interaction.response.send_message("Este comando só pode ser usado no canal de recrutamento.", ephemeral=True)
-        
-        await interaction.response.defer(ephemeral=True)
-        user_data = await self.bot.db_manager.execute_query("SELECT * FROM guild_members WHERE discord_id = $1 AND status = 'pending'", interaction.user.id, fetch="one")
-        if not user_data:
-            return await interaction.followup.send("Não encontrei um registo pendente para si. Use `/registrar <nick>` primeiro.")
+    # --- COMANDO /verificar (REMOVIDO) ---
+    # (A lógica agora é 100% baseada em botões de aprovação)
 
-        sucesso, mensagem = await verificar_membro(self.bot, config_data, interaction.user, user_data)
-        
-        if sucesso:
-            await interaction.followup.send(mensagem, ephemeral=False)
-        else:
-            # --- CORREÇÃO DE ERRO DE DIGITAÇÃO ---
-            await interaction.followup.send(mensagem, ephemeral=True) # Estava "followip"
-
-    # --- Loop de Verificação (Registo) ---
-    @tasks.loop(minutes=3)
-    async def verificacao_automatica(self):
-        pending_list = await self.bot.db_manager.execute_query("SELECT * FROM guild_members WHERE status = 'pending'", fetch="all")
-        if not pending_list: return
-        logging.info(f"[Loop de Registo] A verificar {len(pending_list)} utilizadores...")
-        
-        for user_data in pending_list:
-            server_id = user_data['server_id']
-            config_data = await self.bot.db_manager.execute_query("SELECT * FROM server_config WHERE server_id = $1", server_id, fetch="one")
-            guild = self.bot.get_guild(server_id)
-            if not guild or not config_data:
-                await self.bot.db_manager.execute_query("DELETE FROM guild_members WHERE discord_id = $1", user_data['discord_id'])
-                continue
-            
-            membro = guild.get_member(user_data['discord_id'])
-            if not membro:
-                await self.bot.db_manager.execute_query("DELETE FROM guild_members WHERE discord_id = $1", user_data['discord_id'])
-                continue
-            
-            await verificar_membro(self.bot, config_data, membro, user_data)
-
-    @verificacao_automatica.before_loop
-    async def before_loop(self):
-        await self.bot.wait_until_ready()
+    # --- Loop de Verificação (REMOVIDO) ---
+    # (A verificação automática da bio era o problema. Removemos.)
 
 async def setup(bot):
     await bot.add_cog(RecrutamentoCog(bot))
