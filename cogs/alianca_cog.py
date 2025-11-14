@@ -20,15 +20,16 @@ class AliancaCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
-    @app_commands.command(name="alianca_registrar", description="Verifica 100% automático se você está na aliança.")
+    # --- MUDANÇA AQUI ---
+    @app_commands.command(name="aplicar_alianca", description="Verifica 100% automático se você está na aliança.")
     @app_commands.describe(nick="O seu nick exato no Albion Online.")
-    async def alianca_registrar(self, interaction: discord.Interaction, nick: str):
+    async def aplicar_alianca(self, interaction: discord.Interaction, nick: str):
         config_data = await self.bot.db_manager.execute_query("SELECT * FROM server_config WHERE server_id = $1", interaction.guild.id, fetch="one")
         
         # Verifica se o bot está em "Modo Aliança"
         modo = config_data.get('mode', 'guild')
         if modo != 'alliance':
-            return await interaction.response.send_message("Este servidor não está configurado para verificação de aliança. Use `/registrar`.", ephemeral=True)
+            return await interaction.response.send_message("Este servidor não está configurado para verificação de aliança.", ephemeral=True)
 
         if not all([config_data, config_data.get('canal_registo_id'), config_data.get('alliance_name'), config_data.get('alliance_role_id')]):
             return await interaction.response.send_message("O bot ainda não foi totalmente configurado por um admin.", ephemeral=True)
@@ -115,7 +116,7 @@ class AliancaCog(commands.Cog):
                 "INSERT INTO guild_members (discord_id, server_id, albion_nick, status) VALUES ($1, $2, $3, 'verified') "
                 "ON CONFLICT (discord_id) DO UPDATE SET "
                 "server_id = EXCLUDED.server_id, albion_nick = EXCLUDED.albion_nick, "
-                "status = 'verified', verification_code = NULL",
+                "status = 'verified'",
                 interaction.user.id, interaction.guild.id, nick
             )
             await self.bot.db_manager.execute_query("INSERT INTO recruitment_log (server_id, discord_id, albion_nick, action) VALUES ($1, $2, $3, 'verified_auto')", interaction.guild.id, interaction.user.id, nick)
