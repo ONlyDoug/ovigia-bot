@@ -8,11 +8,6 @@ import string
 from datetime import datetime, timedelta
 from utils.permissions import has_permission, check_admin_prefix # Importa as novas permissões
 
-# --- Funções Auxiliares (Não mudam) ---
-def gerar_codigo(tamanho=6):
-    caracteres = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-    return ''.join(random.choice(caracteres) for _ in range(tamanho))
-
 async def log_to_channel(bot, guild_id, message, color=None):
     try:
         config_data = await bot.db_manager.execute_query("SELECT canal_logs_id FROM server_config WHERE server_id = $1", guild_id, fetch="one")
@@ -115,7 +110,11 @@ class AdminCog(commands.Cog):
         if not role_ids:
             return await interaction.response.send_message("Nenhum cargo válido mencionado.", ephemeral=True)
         ids_str = ",".join(str(rid) for rid in role_ids)
-        await self.bot.db_manager.execute_query("INSERT INTO server_config_permissoes (server_id, chave, valor) VALUES ($1, $2, $3) ON CONFLICT (server_id, chave) DO UPDATE SET valor = $3", interaction.guild.id, f"perm_nivel_{nivel}", ids_str)
+        await self.bot.db_manager.execute_query(
+            "INSERT INTO server_config_permissoes (server_id, chave, valor) VALUES ($1, $2, $3) "
+            "ON CONFLICT (server_id, chave) DO UPDATE SET valor = $3",
+            interaction.guild.id, f"perm_nivel_{nivel}", ids_str
+        )
         await interaction.response.send_message(f"✅ **Permissões de Nível {nivel} definidas!**\n**Próximo Passo:** Use `/admin criar_estrutura`.", ephemeral=True)
 
     @admin.command(name="criar_estrutura", description="Passo 2: Cria os canais de recrutamento.")

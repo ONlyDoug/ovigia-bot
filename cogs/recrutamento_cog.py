@@ -91,7 +91,6 @@ class ApprovalView(discord.ui.View):
         guild_tag = f"[{player_info.get('GuildTag', 'N/A')}] " if player_info.get('GuildTag') else ""
         novo_nick = f"{guild_tag}{albion_nick}"
         
-        # Garante que o nick não passa o limite do Discord
         if len(novo_nick) > 32:
             novo_nick = novo_nick[:32]
 
@@ -102,7 +101,6 @@ class ApprovalView(discord.ui.View):
 
             # 1. Definir o cargo a adicionar
             if modo == 'guild':
-                # MODO GUILDA: Só aprova se estiver na guilda principal
                 if not is_in_main_guild:
                     return await interaction.followup.send(f"**Falha na Aprovação!**\nO jogador `{albion_nick}` **não** está na guilda principal (`{main_guild_name}`).\n\nPor favor, aceite-o **dentro do jogo** primeiro e depois clique em 'Aprovar' novamente.", ephemeral=True)
                 
@@ -114,7 +112,6 @@ class ApprovalView(discord.ui.View):
                     await log_to_channel(self.bot, interaction.guild.id, f"❌ ERRO ADMIN: Cargo de Membro (Principal) ID `{config_data['main_guild_role_id']}` não encontrado.", discord.Color.dark_red())
             
             else: # MODO ALIANÇA
-                # No modo aliança, verifica primeiro a guilda principal, depois a aliança
                 if main_guild_name and is_in_main_guild:
                     # É da Guilda Principal (exceção)
                     cargo_principal = interaction.guild.get_role(config_data.get('main_guild_role_id', 0))
@@ -133,7 +130,7 @@ class ApprovalView(discord.ui.View):
                     else:
                         await log_to_channel(self.bot, interaction.guild.id, f"❌ ERRO ADMIN: Cargo de Aliado ID `{config_data.get('alliance_role_id', 0)}` não encontrado.", discord.Color.dark_red())
                     
-                    # Lógica de Tag Dinâmica (Opcional, mas poderosa)
+                    # Lógica de Tag Dinâmica
                     cargo_guilda_dinamico = discord.utils.get(interaction.guild.roles, name=player_guild_name)
                     if cargo_guilda_dinamico:
                         cargos_para_adicionar.append(cargo_guilda_dinamico)
@@ -142,7 +139,6 @@ class ApprovalView(discord.ui.View):
                          await log_to_channel(self.bot, interaction.guild.id, f"ℹ️ Info: Cargo dinâmico `@`{player_guild_name}` não encontrado para {membro.mention}.", discord.Color.greyple())
                 
                 else:
-                    # Não está em nenhuma
                     return await interaction.followup.send(f"**Falha na Aprovação!**\nO jogador `{albion_nick}` **não** está na aliança (`{alliance_name}`).\n\nPeça para ele entrar em uma guilda da aliança primeiro.", ephemeral=True)
             
             # 2. Cargo de Recruta (Remover)
@@ -228,7 +224,6 @@ class RecrutamentoCog(commands.Cog):
             await interaction.followup.send(f"Não encontrei o jogador **{nick}**. Verifique o nome e tente novamente.")
             return
             
-        # Verifica se já está pendente ou verificado
         existing_member = await self.bot.db_manager.execute_query("SELECT status FROM guild_members WHERE discord_id = $1", interaction.user.id, fetch="one")
         if existing_member:
             if existing_member['status'] == 'pending':
@@ -242,7 +237,6 @@ class RecrutamentoCog(commands.Cog):
         player_guild_name = player_info.get('GuildName', '')
         is_already_member = player_guild_name.lower() == guild_name.lower()
         
-        # --- LÓGICA DE FILTRO (Apenas Modo Guilda) ---
         if modo == 'guild' and not is_already_member:
             pve_data = player_info.get('PvE', {})
             total_fame = pve_data.get('Total', 0) 

@@ -38,3 +38,20 @@ def has_permission(level: int):
     async def predicate(interaction: discord.Interaction) -> bool:
         return await check_permission_level(interaction, level)
     return app_commands.check(predicate)
+
+# Verificador de permissões para Comandos de Prefixo (!)
+def check_admin_prefix():
+    async def predicate(ctx):
+        if ctx.author.guild_permissions.administrator: return True
+        # Verifica Nível 4 (Admin Total) para o !sync
+        config_data = await ctx.bot.db_manager.execute_query("SELECT valor FROM server_config_permissoes WHERE server_id = $1 AND chave = 'perm_nivel_4'", ctx.guild.id, fetch="one")
+        if not config_data or not config_data.get('valor'): return False
+        
+        allowed_role_ids = set(config_data.get('valor').split(','))
+        author_roles_ids = {str(role.id) for role in ctx.author.roles}
+        
+        if not author_roles_ids.isdisjoint(allowed_role_ids):
+            return True
+            
+        return False
+    return commands.check(predicate)
