@@ -35,10 +35,16 @@ class SyncCog(commands.Cog):
                 await self.bot.db_manager.execute_query("DELETE FROM guild_members WHERE discord_id = $1", user_id)
                 continue
             
+            # --- LÓGICA DE MODO (NOVA) ---
             modo = config_data.get('mode', 'guild')
-            target_name = config_data.get('alliance_name') if modo == 'alliance' else config_data.get('guild_name')
+            target_name = ""
+            if modo == 'guild':
+                target_name = config_data.get('main_guild_name', '').lower()
+            else: # alliance
+                target_name = config_data.get('alliance_name', '').lower()
             
             if not target_name: # Se nem guilda nem aliança estiverem definidos
+                logging.warning(f"Loop de Limpeza: 'target_name' não definido para {guild.name}.")
                 continue
 
             # API Check
@@ -46,10 +52,14 @@ class SyncCog(commands.Cog):
             
             player_tag = ""
             if player_info:
-                player_tag = player_info.get('AllianceName', '') if modo == 'alliance' else player_info.get('GuildName', '')
-
+                # Verifica a tag correta baseada no modo
+                if modo == 'guild':
+                    player_tag = player_info.get('GuildName', '').lower()
+                else: # alliance
+                    player_tag = player_info.get('AllianceName', '').lower()
+            
             # A Lógica de Expulsão (Agora verifica Guilda ou Aliança)
-            if not player_info or player_tag.lower() != target_name.lower():
+            if not player_info or player_tag != target_name:
                 logging.info(f"REMOÇÃO: {membro.name} ({albion_nick}) não está mais na {modo} '{target_name}'. Expulsando.")
                 
                 try:

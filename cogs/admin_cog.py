@@ -34,22 +34,31 @@ class AdminCog(commands.Cog):
             await self.bot.db_manager.execute_query("""
                 CREATE TABLE IF NOT EXISTS server_config (
                     server_id BIGINT PRIMARY KEY, 
-                    guild_name TEXT, 
-                    role_id BIGINT,
+                    main_guild_name TEXT,     -- Renomeado
+                    main_guild_role_id BIGINT, -- Renomeado
+                    alliance_name TEXT,       -- NOVO
+                    alliance_role_id BIGINT,  -- NOVO
                     canal_registo_id BIGINT, 
                     canal_logs_id BIGINT,
+                    canal_aprovacao_id BIGINT, -- NOVO
                     fame_total BIGINT DEFAULT 0, 
                     fame_pvp BIGINT DEFAULT 0,
-                    recruta_role_id BIGINT,
-                    mode TEXT DEFAULT 'guild', -- 'guild' ou 'alliance' (NOVO)
-                    alliance_name TEXT -- (NOVO)
+                    recruta_role_id BIGINT
                 );
             """)
+            # Adiciona colunas (compatibilidade)
             try: await self.bot.db_manager.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS recruta_role_id BIGINT;")
             except Exception: pass
-            try: await self.bot.db_manager.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS mode TEXT DEFAULT 'guild';")
-            except Exception: pass
             try: await self.bot.db_manager.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS alliance_name TEXT;")
+            except Exception: pass
+            try: await self.bot.db_manager.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS alliance_role_id BIGINT;")
+            except Exception: pass
+            try: await self.bot.db_manager.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS canal_aprovacao_id BIGINT;")
+            except Exception: pass
+            # Renomeia colunas antigas (compatibilidade)
+            try: await self.bot.db_manager.execute_query("ALTER TABLE server_config RENAME COLUMN guild_name TO main_guild_name;")
+            except Exception: pass
+            try: await self.bot.db_manager.execute_query("ALTER TABLE server_config RENAME COLUMN role_id TO main_guild_role_id;")
             except Exception: pass
             
             # Tabela de Permissões
@@ -82,25 +91,19 @@ class AdminCog(commands.Cog):
             
             await self.bot.db_manager.execute_query("DROP TABLE IF EXISTS pending_users;")
             try:
-                await self.bot.db_manager.execute_query("""
-                    ALTER TABLE guild_members
-                    ADD CONSTRAINT fk_server_config
-                    FOREIGN KEY(server_id) REFERENCES server_config(server_id) ON DELETE CASCADE;
-                """)
+                await self.bot.db_manager.execute_query("ALTER TABLE guild_members ADD CONSTRAINT fk_server_config FOREIGN KEY(server_id) REFERENCES server_config(server_id) ON DELETE CASCADE;")
             except asyncpg.exceptions.DuplicateObjectError: pass 
             
             try: await self.bot.db_manager.execute_query("ALTER TABLE server_config DROP COLUMN IF EXISTS admin_role_id;")
             except Exception: pass
 
-            print("Base de dados (O Vigia Bot) v2.1 (Modo Aliança) verificada e pronta.")
+            print("Base de dados (O Vigia Bot) v3.0 (Sistema de Aprovação) verificada e pronta.")
         except Exception as e:
             print(f"❌ Erro CRÍTICO ao inicializar DB (Vigia): {e}")
             raise e
 
     # --- Grupo de Comandos ---
     admin = app_commands.Group(name="admin", description="Comandos de administração do O Vigia Bot.")
-    
-    # --- Comandos de Setup ---
     
     @admin.command(name="setup_permissoes", description="Passo 1: Define os cargos de staff (Suporte, Admin, etc).")
     @app_commands.checks.has_permissions(administrator=True)
@@ -112,42 +115,19 @@ class AdminCog(commands.Cog):
         if not role_ids:
             return await interaction.response.send_message("Nenhum cargo válido mencionado.", ephemeral=True)
         ids_str = ",".join(str(rid) for rid in role_ids)
-        await self.bot.db_manager.execute_query(
-            "INSERT INTO server_config_permissoes (server_id, chave, valor) VALUES ($1, $2, $3) "
-            "ON CONFLICT (server_id, chave) DO UPDATE SET valor = $3",
-            interaction.guild.id, f"perm_nivel_{nivel}", ids_str
-        )
-        await interaction.response.send_message(f"✅ **Permissões de Nível {nivel} definidas!**\n**Próximo Passo:** Use `/admin set_mode`.", ephemeral=True)
+        await self.bot.db_manager.execute_query("INSERT INTO server_config_permissoes (server_id, chave, valor) VALUES ($1, $2, $3) ON CONFLICT (server_id, chave) DO UPDATE SET valor = $3", interaction.guild.id, f"perm_nivel_{nivel}", ids_str)
+        await interaction.response.send_message(f"✅ **Permissões de Nível {nivel} definidas!**\n**Próximo Passo:** Use `/admin criar_estrutura`.", ephemeral=True)
 
-    @admin.command(name="set_mode", description="Passo 2: Define o modo de operação do bot neste servidor.")
-    @has_permission(4)
-    @app_commands.describe(modo="O modo de operação: recrutar para Guilda ou verificar uma Aliança inteira.")
-    @app_commands.choices(modo=[
-        app_commands.Choice(name="Modo Guilda (Filtro de Fama + 1 Cargo)", value="guild"),
-        app_commands.Choice(name="Modo Aliança (Sem Filtro + Tags de Guilda)", value="alliance"),
-    ])
-    async def set_mode(self, interaction: discord.Interaction, modo: str):
-        await self.bot.db_manager.execute_query(
-            "INSERT INTO server_config (server_id, mode) VALUES ($1, $2) "
-            "ON CONFLICT (server_id) DO UPDATE SET mode = $2",
-            interaction.guild.id, modo
-        )
-        if modo == 'guild':
-            await interaction.response.send_message(f"✅ **Modo do Bot: Guilda**\nO bot irá filtrar por Fama e atribuir um único cargo de membro.\n**Próximo Passo:** `/admin criar_estrutura`.", ephemeral=True)
-        else: # Alliance
-            await interaction.response.send_message(f"✅ **Modo do Bot: Aliança**\nO bot irá ignorar Fama e atribuir cargos dinâmicos baseados na guilda do jogador.\n**Próximo Passo:** `/admin criar_estrutura`.", ephemeral=True)
-
-    @admin.command(name="criar_estrutura", description="Passo 3: Cria os canais de recrutamento.")
+    @admin.command(name="criar_estrutura", description="Passo 2: Cria os canais de recrutamento.")
     @has_permission(4)
     async def criar_estrutura(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         guild = interaction.guild
         
-        # Overwrites padrão para canais de admin
         admin_overwrites = { guild.default_role: discord.PermissionOverwrite(view_channel=False), guild.me: discord.PermissionOverwrite(view_channel=True) }
         try:
             staff_roles = set()
-            for i in range(1, 5): # Puxa todos os cargos Nível 1+
+            for i in range(1, 5):
                 config_perm = await self.bot.db_manager.execute_query("SELECT valor FROM server_config_permissoes WHERE server_id = $1 AND chave = $2", guild.id, f"perm_nivel_{i}", fetch="one")
                 if config_perm and config_perm['valor']:
                     staff_roles.update(config_perm['valor'].split(','))
@@ -156,52 +136,55 @@ class AdminCog(commands.Cog):
                     admin_overwrites[role] = discord.PermissionOverwrite(view_channel=True)
         except Exception as e: print(f"Não foi possível pré-definir permissões de staff: {e}")
 
-        # Criação dos canais
         cat_publica = await guild.create_category("➡️ BEM-VINDO", overwrites={guild.default_role: discord.PermissionOverwrite(read_messages=True, send_messages=False, view_channel=True)})
         cat_privada = await guild.create_category("🔒 ADMINISTRAÇÃO", overwrites=admin_overwrites)
         await guild.create_text_channel("📜-regras-e-info", category=cat_publica)
         canal_recrutamento = await guild.create_text_channel("✅-recrutamento", category=cat_publica)
         canal_comandos = await guild.create_text_channel("🔒-bot-comandos", category=cat_privada)
         canal_logs = await guild.create_text_channel("📢-bot-logs", category=cat_privada)
-        
-        # --- NOVO CANAL DE APROVAÇÕES ---
         canal_aprovacoes = await guild.create_text_channel("⏳-aprovações", category=cat_privada)
 
         await canal_recrutamento.set_permissions(guild.default_role, send_messages=True, read_messages=True, view_channel=True, use_application_commands=True)
         
-        # Salva os canais importantes
         await self.bot.db_manager.execute_query(
-            "UPDATE server_config SET canal_registo_id = $1, canal_logs_id = $2, canal_aprovacao_id = $3 WHERE server_id = $4",
-            canal_recrutamento.id, canal_logs.id, canal_aprovacoes.id, guild.id
+            "INSERT INTO server_config (server_id, canal_registo_id, canal_logs_id, canal_aprovacao_id) VALUES ($1, $2, $3, $4) "
+            "ON CONFLICT (server_id) DO UPDATE SET canal_registo_id = $2, canal_logs_id = $3, canal_aprovacao_id = $4",
+            guild.id, canal_recrutamento.id, canal_logs.id, canal_aprovacoes.id
         )
-        await interaction.followup.send(f"✅ **Estrutura de Canais Criada!**\nNovo canal `#⏳-aprovações` adicionado para a equipa de Suporte.\n**Próximo Passo:** Use os comandos de setup restantes em {canal_comandos.mention}.", ephemeral=True)
+        await interaction.followup.send(f"✅ **Estrutura de Canais Criada!**\nNovo canal `#⏳-aprovações` adicionado para a equipa de Suporte.\n**Próximo Passo:** Use `/admin setup_guilda_principal` ou `/admin setup_alianca`.", ephemeral=True)
+
+    @admin.command(name="setup_guilda_principal", description="Passo 3 (Modo Guilda): Define a Guilda e o cargo de Membro.")
+    @has_permission(4)
+    async def setup_guilda_principal(self, interaction: discord.Interaction, nome_guilda: str, cargo_membro: discord.Role):
+        await self.bot.db_manager.execute_query(
+            "UPDATE server_config SET main_guild_name = $1, main_guild_role_id = $2, mode = 'guild' WHERE server_id = $3",
+            nome_guilda, cargo_membro.id, interaction.guild.id
+        )
+        await interaction.response.send_message(f"✅ **Modo: Guilda Definido!**\nRecrutando para `{nome_guilda}` e dando o cargo {cargo_membro.mention}.\n**Próximo Passo:** `/admin setup_requisitos`.", ephemeral=True)
+
+    @admin.command(name="setup_alianca", description="Passo 3 (Modo Aliança): Define a Aliança e o cargo de Aliado.")
+    @has_permission(4)
+    async def setup_alianca(self, interaction: discord.Interaction, nome_alianca: str, cargo_aliado: discord.Role):
+        await self.bot.db_manager.execute_query(
+            "UPDATE server_config SET alliance_name = $1, alliance_role_id = $2, mode = 'alliance' WHERE server_id = $3",
+            nome_alianca, cargo_aliado.id, interaction.guild.id
+        )
+        await interaction.response.send_message(f"✅ **Modo: Aliança Definido!**\nVerificando membros da `{nome_alianca}` e dando o cargo {cargo_aliado.mention}.\n**Próximo Passo:** `/admin setup_guilda_principal` (para exceções).", ephemeral=True)
 
     @admin.command(name="setup_requisitos", description="Passo 4 (Modo Guilda): Define os requisitos mínimos de Fama.")
     @has_permission(4)
     async def setup_requisitos(self, interaction: discord.Interaction, fama_total: int, fama_pvp: int):
         await self.bot.db_manager.execute_query("UPDATE server_config SET fame_total = $1, fame_pvp = $2 WHERE server_id = $3", fama_total, fama_pvp, interaction.guild.id)
-        await interaction.response.send_message(f"✅ **Requisitos Definidos!**\nFama Total: `{fama_total:,}` | Fama PvP: `{fama_pvp:,}`\n**Próximo Passo:** Use `/admin setup_guilda` ou `/admin setup_alianca`.", ephemeral=True)
+        await interaction.response.send_message(f"✅ **Requisitos de Fama Definidos!**\n**Próximo Passo:** `/admin setup_tag_recruta` (opcional).", ephemeral=True)
 
-    @admin.command(name="setup_guilda", description="Passo 5 (Modo Guilda): Define a Guilda e o cargo de Membro.")
-    @has_permission(4)
-    async def setup_guilda(self, interaction: discord.Interaction, nome_guilda: str, cargo_membro: discord.Role):
-        await self.bot.db_manager.execute_query("UPDATE server_config SET guild_name = $1, role_id = $2, mode = 'guild' WHERE server_id = $3", nome_guilda, cargo_membro.id, interaction.guild.id)
-        await interaction.response.send_message(f"✅ **Guilda Definida!**\nO bot está em **Modo Guilda**, a recrutar para `{nome_guilda}` e a dar o cargo {cargo_membro.mention}.\n**Próximo Passo:** `/admin setup_tag_recruta` (opcional).", ephemeral=True)
-
-    @admin.command(name="setup_alianca", description="Passo 5 (Modo Aliança): Define o nome da Aliança.")
-    @has_permission(4)
-    async def setup_alianca(self, interaction: discord.Interaction, nome_alianca: str):
-        await self.bot.db_manager.execute_query("UPDATE server_config SET alliance_name = $1, mode = 'alliance' WHERE server_id = $2", nome_alianca, interaction.guild.id)
-        await interaction.response.send_message(f"✅ **Aliança Definida!**\nO bot está em **Modo Aliança**, a verificar membros da `{nome_alianca}` e a dar cargos dinâmicos (ex: @GuildaA, @GuildaB).\n**Próximo Passo:** `/admin setup_tag_recruta` (opcional).", ephemeral=True)
-
-    @admin.command(name="setup_tag_recruta", description="Passo 6 (Opcional): Define a tag de 'Recruta' a ser removida.")
+    @admin.command(name="setup_tag_recruta", description="Passo 5 (Opcional): Define a tag de 'Recruta' a ser removida.")
     @has_permission(4)
     async def setup_tag_recruta(self, interaction: discord.Interaction, cargo: discord.Role):
         await self.bot.db_manager.execute_query("UPDATE server_config SET recruta_role_id = $1 WHERE server_id = $2", cargo.id, interaction.guild.id)
-        await interaction.response.send_message(f"✅ **Tag de Recruta Definida!**\nO bot irá **remover** o cargo {cargo.mention} na verificação.", ephemeral=True)
+        await interaction.response.send_message(f"✅ **Tag de Recruta Definida!**", ephemeral=True)
 
     @admin.command(name="status", description="Mostra a configuração atual e o número de pendentes.")
-    @has_permission(1) # Nível 1 (Suporte) pode ver
+    @has_permission(1)
     async def status(self, interaction: discord.Interaction):
         config_data = await self.bot.db_manager.execute_query("SELECT * FROM server_config WHERE server_id = $1", interaction.guild.id, fetch="one")
         if not config_data: return await interaction.response.send_message("O bot ainda não foi configurado.", ephemeral=True)
@@ -217,12 +200,14 @@ class AdminCog(commands.Cog):
         embed.add_field(name="Modo de Operação", value=f"**{modo.upper()}**", inline=False)
         
         if modo == 'guild':
-            embed.add_field(name="Guilda Alvo", value=f"`{config_data.get('guild_name', 'N/D')}`", inline=True)
-            embed.add_field(name="Cargo de Membro", value=f"{format_mention(config_data.get('role_id'), 'role')}", inline=True)
+            embed.add_field(name="Guilda Principal", value=f"`{config_data.get('main_guild_name', 'N/D')}`", inline=True)
+            embed.add_field(name="Cargo Principal", value=f"{format_mention(config_data.get('main_guild_role_id'), 'role')}", inline=True)
             embed.add_field(name="Requisitos", value=(f"Fama Total: `{config_data.get('fame_total', 0):,}`\nFama PvP: `{config_data.get('fame_pvp', 0):,}`"), inline=False)
         else:
             embed.add_field(name="Aliança Alvo", value=f"`{config_data.get('alliance_name', 'N/D')}`", inline=True)
-            embed.add_field(name="Cargo de Membro", value="`Dinâmico (pelo nome da guilda)`", inline=True)
+            embed.add_field(name="Cargo Aliado", value=f"{format_mention(config_data.get('alliance_role_id'), 'role')}", inline=True)
+            embed.add_field(name="Guilda Principal (Exceção)", value=f"`{config_data.get('main_guild_name', 'N/D')}`", inline=False)
+            embed.add_field(name="Cargo Principal (Exceção)", value=f"{format_mention(config_data.get('main_guild_role_id'), 'role')}", inline=False)
         
         perm_texto = ""
         for i in range(1, 5):
@@ -237,7 +222,7 @@ class AdminCog(commands.Cog):
         embed.add_field(name="Canais Discord", value=(f"Registo: {format_mention(config_data.get('canal_registo_id'), 'channel')}\nLogs: {format_mention(config_data.get('canal_logs_id'), 'channel')}\nAprovações: {format_mention(config_data.get('canal_aprovacao_id'), 'channel')}"), inline=True)
         
         pendentes_count_raw = await self.bot.db_manager.execute_query("SELECT COUNT(*) as total FROM guild_members WHERE status = 'pending' AND server_id = $1", interaction.guild.id, fetch="one")
-        embed.add_field(name="Membros Pendentes", value=f"**{pendentes_count_raw['total']}** utilizadores na fila.", inline=True)
+        embed.add_field(name="Aplicações Pendentes", value=f"**{pendentes_count_raw['total']}** aplicações em fila.", inline=True)
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -254,35 +239,31 @@ class AdminCog(commands.Cog):
             try:
                 await canal_recrutamento.set_permissions(interaction.guild.default_role, send_messages=True, read_messages=True, view_channel=True, use_application_commands=True)
             except discord.Forbidden:
-                await interaction.followup.send("❌ Falha ao corrigir {canal_recrutamento.mention}: Sem permissão de 'Gerir Permissões'.")
+                await interaction.followup.send("❌ Falha ao corrigir {canal_recrutamento.mention}: Sem permissão.")
                 return
         
-        # 2. Canal de Aprovações (Dar permissão à Staff)
+        # 2. Canal de Aprovações
         canal_aprovacoes = interaction.guild.get_channel(config_data.get('canal_aprovacao_id', 0))
         if canal_aprovacoes:
             try:
-                # Pega em todos os cargos de Nível 1+
                 staff_roles = set()
                 for i in range(1, 5):
                     config_perm = await self.bot.db_manager.execute_query("SELECT valor FROM server_config_permissoes WHERE server_id = $1 AND chave = $2", interaction.guild.id, f"perm_nivel_{i}", fetch="one")
                     if config_perm and config_perm['valor']:
                         staff_roles.update(config_perm['valor'].split(','))
                 
-                # Atualiza as permissões
                 overwrites = canal_aprovacoes.overwrites
-                overwrites[interaction.guild.default_role] = discord.PermissionOverwrite(view_channel=False) # Esconde de @everyone
-                overwrites[interaction.guild.me] = discord.PermissionOverwrite(view_channel=True) # Bot pode ver
+                overwrites[interaction.guild.default_role] = discord.PermissionOverwrite(view_channel=False)
+                overwrites[interaction.guild.me] = discord.PermissionOverwrite(view_channel=True)
                 for role_id in staff_roles:
                     if role := interaction.guild.get_role(int(role_id)):
                         overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_messages=True)
                 
                 await canal_aprovacoes.edit(overwrites=overwrites)
             except discord.Forbidden:
-                await interaction.followup.send(f"❌ Falha ao corrigir {canal_aprovacoes.mention}: Sem permissão de 'Gerir Permissões'.")
+                await interaction.followup.send(f"❌ Falha ao corrigir {canal_aprovacoes.mention}: Sem permissão.")
                 return
-
-        await interaction.followup.send("✅ Permissões dos canais de recrutamento e aprovações foram atualizadas para a staff.")
-
+        await interaction.followup.send("✅ Permissões dos canais de recrutamento e aprovações foram atualizadas.")
 
     @admin.command(name="relatorio", description="Gera um relatório de recrutamento dos últimos dias.")
     @has_permission(2)
@@ -304,7 +285,7 @@ class AdminCog(commands.Cog):
         admin_data = await self.bot.db_manager.execute_query(admin_query, interaction.guild.id, data_limite, fetch="all")
         admin_texto = "Nenhuma ação manual."
         if admin_data:
-            admin_texto = "\n".join([f"`{row['total']}` ações - <@{row['admin_id']}>" for row in admin_data])
+            admin_texto = "\n".join([f"`{row['total']}` aprovações - <@{row['admin_id']}>" for row in admin_data])
         embed.add_field(name="🏆 Staff Ativo (Ações Manuais)", value=admin_texto, inline=False)
         await interaction.followup.send(embed=embed)
 
