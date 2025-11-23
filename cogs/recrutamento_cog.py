@@ -6,155 +6,216 @@ import logging
 logger = logging.getLogger("RecrutamentoCog")
 
 class ApprovalView(discord.ui.View):
+    """View persistente para aprovação de recrutas"""
+    
     def __init__(self, bot):
-        super().__init__(timeout=None) # View persistente
+        super().__init__(timeout=None)
         self.bot = bot
-
-    @discord.ui.button(label="Aprovar", style=discord.ButtonStyle.green, custom_id="approval_view:approve")
+    
+    @discord.ui.button(
+        label="Aprovar",
+        style=discord.ButtonStyle.green,
+        custom_id="approval_view:approve"
+    )
     async def approve_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Aprova um recruta"""
         await interaction.response.defer()
         
-        # Extrair info do embed
         try:
             embed = interaction.message.embeds[0]
-            # Assumindo que o User ID está no rodapé
             user_id = int(embed.footer.text.split("ID: ")[1])
             albion_nick = embed.fields[0].value
             
-            # Obter config
-            config = await self.bot.db.fetchrow_query("SELECT * FROM server_config WHERE guild_id = $1", interaction.guild_id)
-            if not config:
-                await interaction.followup.send("Configuração do servidor não encontrada.", ephemeral=True)
-                return
-
-            # Verificar API novamente
-            player_info = await self.bot.albion.search_player(albion_nick)
-            if not player_info:
-                await interaction.followup.send("Jogador não encontrado na API.", ephemeral=True)
-                return
-                
-            guild_tag = config['guild_tag']
+            # Buscar configuração
+            config = await self.bot.db.fetchrow_query(
+                "SELECT * FROM server_config WHERE guild_id = $1",
+                interaction.guild_id
+            )
             
-            # Obter o membro
-            guild = interaction.guild
-            member = guild.get_member(user_id)
-            if not member:
-                await interaction.followup.send("Membro não encontrado no servidor Discord.", ephemeral=True)
+            if not config:
+                await interaction.followup.send("❌ Configuração não encontrada.", ephemeral=True)
                 return
-
-            # Atualizar Cargos e Nick
+            
+            # Verificar se jogador ainda existe na API
+            player = await self.bot.albion.search_player(albion_nick)
+            if not player:
+                await interaction.followup.send("❌ Jogador não encontrado na API.", ephemeral=True)
+                return
+            
+            # Obter membro do Discord
+            member = interaction.guild.get_member(user_id)
+            if not member:
+                await interaction.followup.send("❌ Membro não encontrado no servidor.", ephemeral=True)
+                return
+            
+            # Atualizar cargos e nickname
             try:
-                recruit_role = guild.get_role(config['recruit_role_id'])
-                member_role = guild.get_role(config['member_role_id'])
+                recruit_role = interaction.guild.get_role(config['recruit_role_id'])
+                member_role = interaction.guild.get_role(config['member_role_id'])
                 
-                if recruit_role:
+                if recruit_role and recruit_role in member.roles:
                     await member.remove_roles(recruit_role)
+                
                 if member_role:
                     await member.add_roles(member_role)
                 
+                # Atualizar nickname
+                guild_tag = config['guild_tag']
                 new_nick = f"[{guild_tag}] {albion_nick}"
-                await member.edit(nick=new_nick[:32]) # Limite do Discord
+                await member.edit(nick=new_nick[:32])
                 
-                await interaction.followup.send(f"Aprovado {member.mention}. Cargos e Nick atualizados.")
-                
-                # Atualizar Log
-                await self.bot.db.execute_query("UPDATE recruitment_log SET status = 'APPROVED', reviewed_by = $1 WHERE user_id = $2 AND status = 'PENDING'", interaction.user.id, user_id)
+                # Atualizar log no banco
+                await self.bot.db.execute_query(
+                    "UPDATE recruitment_log SET status = 'APPROVED', reviewed_by = $1 WHERE user_id = $2 AND status = 'PENDING'",
+                    interaction.user.id,
+                    user_id
+                )
                 
                 # Desabilitar botões
                 for item in self.children:
                     item.disabled = True
                 await interaction.message.edit(view=self)
-
+                
+                await interaction.followup.send(
+                    f"✅ {member.mention} aprovado! Cargos e nickname atualizados."
+                )
+                
             except discord.Forbidden:
-                await interaction.followup.send("Bot sem permissões para gerenciar cargos/apelidos.", ephemeral=True)
+                await interaction.followup.send(
+                    "❌ Sem permissões para gerenciar cargos/nicknames.",
+                    ephemeral=True
+                )
             except Exception as e:
-                logger.error(f"Erro na aprovação: {e}")
-                await interaction.followup.send(f"Erro: {e}", ephemeral=True)
-
+                logger.error(f"Erro ao aprovar: {e}")
+                await interaction.followup.send(f"❌ Erro: {e}", ephemeral=True)
+                
         except Exception as e:
-            logger.error(f"Erro ao analisar embed de aprovação: {e}")
-            await interaction.followup.send("Erro ao processar aprovação.", ephemeral=True)
-
-    @discord.ui.button(label="Rejeitar", style=discord.ButtonStyle.red, custom_id="approval_view:reject")
+            logger.error(f"Erro ao processar aprovação: {e}")
+            await interaction.followup.send("❌ Erro ao processar aprovação.", ephemeral=True)
+    
+    @discord.ui.button(
+        label="Rejeitar",
+        style=discord.ButtonStyle.red,
+        custom_id="approval_view:reject"
+    )
     async def reject_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Lógica similar ao aprovar mas apenas atualiza log e notifica
-        await interaction.response.send_message("Rejeitado (Ainda não implementado completamente).", ephemeral=True)
+        """Rejeita um recruta"""
+        await interaction.response.send_message(
+            "❌ Rejeitado (funcionalidade em desenvolvimento).",
+            ephemeral=True
+        )
 
 
 class RecrutamentoCog(commands.Cog):
+    """Cog para sistema de recrutamento"""
+    
     def __init__(self, bot):
         self.bot = bot
-
-    @app_commands.command(name="registrar", description="Registrar-se na guilda")
-    @app_commands.describe(nickname="Seu apelido no Albion Online")
+    
+    @app_commands.command(
+        name="registrar",
+        description="Registrar-se na guilda"
+    )
+    @app_commands.describe(nickname="Seu nickname no Albion Online")
     async def registrar(self, interaction: discord.Interaction, nickname: str):
+        """Comando para registrar-se na guilda"""
         await interaction.response.defer(ephemeral=True)
         
-        guild_id = interaction.guild_id
-        config = await self.bot.db.fetchrow_query("SELECT * FROM server_config WHERE guild_id = $1", guild_id)
+        # Buscar configuração
+        config = await self.bot.db.fetchrow_query(
+            "SELECT * FROM server_config WHERE guild_id = $1",
+            interaction.guild_id
+        )
         
         if not config:
-            await interaction.followup.send("Bot não configurado. Peça a um admin para rodar /admin_setup.")
+            await interaction.followup.send(
+                "❌ Bot não configurado. Peça a um admin para usar `/admin_setup`."
+            )
             return
-
-        # Verificar Modo de Operação
+        
+        # Verificar modo de operação
         server_type = config.get('server_type', 'GUILD')
         if server_type not in ['GUILD', 'HYBRID']:
-            await interaction.followup.send(f"⚠️ Comando desativado. Este servidor está operando em modo **{server_type}** (apenas Aliança).")
+            await interaction.followup.send(
+                f"⚠️ Este comando está desativado. Servidor em modo **{server_type}**."
+            )
             return
-
-        # Verificar se o sistema de recrutamento está ativo
+        
+        # Verificar se canais estão configurados
         if not config['recruitment_channel_id'] or not config['approval_channel_id']:
-            await interaction.followup.send("O sistema de recrutamento não está ativado neste servidor (canais não configurados).")
+            await interaction.followup.send(
+                "❌ Sistema de recrutamento não configurado (canais faltando)."
+            )
             return
-
-        # 1. Verificar API
+        
+        # Buscar jogador na API do Albion
         player = await self.bot.albion.search_player(nickname)
         if not player:
-            await interaction.followup.send(f"Jogador '{nickname}' não encontrado na API do Albion.")
+            await interaction.followup.send(
+                f"❌ Jogador '{nickname}' não encontrado no Albion Online."
+            )
             return
-
-        # 2. Verificar requisitos
+        
+        # Verificar requisitos de fama
         pve_fame = player.get('LifetimeStatistics', {}).get('PvE', {}).get('Total', 0)
         pvp_fame = player.get('KillFame', 0)
         
-        min_pve = config['min_fame_pve']
-        min_pvp = config['min_fame_pvp']
+        min_pve = config['min_fame_pve'] or 0
+        min_pvp = config['min_fame_pvp'] or 0
         
-        passed_reqs = True
-        if pve_fame < min_pve or pvp_fame < min_pvp:
-            passed_reqs = False
-            
-        msg = f"Solicitação de registro para {nickname}.\n"
-        if not passed_reqs:
-            msg += f"⚠️ Não atende aos requisitos automáticos (PvE: {pve_fame}/{min_pve}, PvP: {pvp_fame}/{min_pvp}). Enviado para análise manual."
-        else:
-            msg += "✅ Atende aos requisitos."
-
-        # Enviar para Canal de Aprovação
-        approval_channel_id = config['approval_channel_id']
-        approval_channel = interaction.guild.get_channel(approval_channel_id)
+        meets_requirements = pve_fame >= min_pve and pvp_fame >= min_pvp
         
-        if approval_channel:
-            embed = discord.Embed(title="Solicitação de Recrutamento", color=discord.Color.blue())
-            embed.add_field(name="Apelido", value=player['Name'], inline=True)
-            embed.add_field(name="Guilda", value=player.get('GuildName', 'Nenhuma'), inline=True)
-            embed.add_field(name="Fama PvE", value=f"{pve_fame:,}", inline=True)
-            embed.add_field(name="Fama PvP", value=f"{pvp_fame:,}", inline=True)
-            embed.add_field(name="Usuário Discord", value=interaction.user.mention, inline=False)
-            embed.set_footer(text=f"ID: {interaction.user.id}")
-            
-            view = ApprovalView(self.bot)
-            await approval_channel.send(embed=embed, view=view)
-            await interaction.followup.send("Registro enviado para aprovação.")
-            
-            # Logar no DB
-            await self.bot.db.execute_query(
-                "INSERT INTO recruitment_log (user_id, guild_id, albion_nick, status) VALUES ($1, $2, $3, 'PENDING')",
-                interaction.user.id, guild_id, player['Name']
-            )
-        else:
-            await interaction.followup.send("Canal de aprovação não configurado.")
+        # Criar embed para aprovação
+        approval_channel = interaction.guild.get_channel(config['approval_channel_id'])
+        
+        if not approval_channel:
+            await interaction.followup.send("❌ Canal de aprovação não encontrado.")
+            return
+        
+        embed = discord.Embed(
+            title="📋 Solicitação de Recrutamento",
+            color=discord.Color.green() if meets_requirements else discord.Color.orange()
+        )
+        embed.add_field(name="Nickname", value=player['Name'], inline=True)
+        embed.add_field(
+            name="Guilda Atual",
+            value=player.get('GuildName', 'Nenhuma'),
+            inline=True
+        )
+        embed.add_field(name="Fama PvE", value=f"{pve_fame:,}", inline=True)
+        embed.add_field(name="Fama PvP", value=f"{pvp_fame:,}", inline=True)
+        embed.add_field(
+            name="Requisitos",
+            value=f"PvE: {min_pve:,} | PvP: {min_pvp:,}",
+            inline=True
+        )
+        embed.add_field(
+            name="Status",
+            value="✅ Atende" if meets_requirements else "⚠️ Não atende (análise manual)",
+            inline=True
+        )
+        embed.add_field(
+            name="Usuário Discord",
+            value=interaction.user.mention,
+            inline=False
+        )
+        embed.set_footer(text=f"ID: {interaction.user.id}")
+        
+        # Enviar para canal de aprovação
+        view = ApprovalView(self.bot)
+        await approval_channel.send(embed=embed, view=view)
+        
+        # Registrar no banco
+        await self.bot.db.execute_query(
+            "INSERT INTO recruitment_log (user_id, guild_id, albion_nick, status) VALUES ($1, $2, $3, 'PENDING')",
+            interaction.user.id,
+            interaction.guild_id,
+            player['Name']
+        )
+        
+        await interaction.followup.send(
+            "✅ Registro enviado para aprovação! Aguarde a análise da equipe."
+        )
 
 async def setup(bot):
     await bot.add_cog(RecrutamentoCog(bot))

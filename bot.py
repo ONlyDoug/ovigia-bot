@@ -2,12 +2,16 @@ import discord
 from discord.ext import commands
 import logging
 import asyncio
-import config
+from config import Config
 from database import DatabaseManager
 from albion_api import AlbionAPI
 from cogs.recrutamento_cog import ApprovalView
 
-# Configuração de Logging
+# Configurar logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger("Bot")
 
 class OVigiaBot(commands.Bot):
@@ -19,77 +23,84 @@ class OVigiaBot(commands.Bot):
         super().__init__(
             command_prefix="!",
             intents=intents,
-            help_command=None,
-            case_insensitive=True
+            help_command=None
         )
         
-        self.db = DatabaseManager()
-        self.albion = AlbionAPI()
-
+        self.db = None
+        self.albion = None
+        
     async def setup_hook(self):
-        """Hook de configuração assíncrono para conexão DB, início da API e carregamento de Cogs."""
+        """Inicialização assíncrona do bot"""
         logger.info("Iniciando setup_hook...")
         
-        # 1. Conectar ao Banco de Dados
-        await self.db.connect()
+        # Inicializar Database
+        try:
+            self.db = DatabaseManager(
+                host=Config.DB_HOST,
+                port=Config.DB_PORT,
+                database=Config.DB_NAME,
+                user=Config.DB_USER,
+                password=Config.DB_PASSWORD
+            )
+            await self.db.connect()
+        except Exception as e:
+            logger.error(f"Erro ao conectar ao banco de dados: {e}")
+            raise
         
-        # 2. Iniciar Sessão da API do Albion
-        await self.albion.start()
+        # Inicializar Albion API
+        self.albion = AlbionAPI()
         
-        # 3. Carregar Cogs
-        cogs = [
+        # Carregar Cogs
+        cogs_to_load = [
             'cogs.admin_cog',
             'cogs.recrutamento_cog',
-            'cogs.alianca_cog',
-            'cogs.sync_cog',
-            'cogs.suporte_cog'
+            'cogs.alianca_cog'
         ]
         
-        for cog in cogs:
+        for cog in cogs_to_load:
             try:
                 await self.load_extension(cog)
                 logger.info(f"Extensão carregada: {cog}")
             except Exception as e:
                 logger.error(f"Falha ao carregar extensão {cog}: {e}")
-
-        # 4. Criar Tabelas (Garantir que AdminCog seja carregado primeiro ou acessar método diretamente)
-        # Podemos acessar a instância do cog para rodar o método
-        admin_cog = self.get_cog("AdminCog")
+        
+        # Criar tabelas (via AdminCog se disponível)
+        admin_cog = self.get_cog('AdminCog')
         if admin_cog:
-            await admin_cog.create_tables()
+            try:
+                await admin_cog.create_tables()
+            except Exception as e:
+                logger.error(f"Erro ao criar tabelas: {e}")
         else:
-            logger.error("AdminCog não encontrado. Tabelas não criadas.")
-
-        # 5. Registrar Views Persistentes
+            logger.warning("AdminCog não encontrado. Tabelas não criadas.")
+        
+        # Registrar Views Persistentes
         self.add_view(ApprovalView(self))
         logger.info("Views persistentes registradas.")
-        
-        # Nota: NÃO sincronizamos globalmente aqui para evitar limites de taxa.
-        # Use o comando !sync no servidor.
-
+    
     async def on_ready(self):
+        """Evento chamado quando o bot está pronto"""
         logger.info(f"Logado como {self.user} (ID: {self.user.id})")
         logger.info("Bot está pronto!")
-
+    
     async def close(self):
-        """Limpeza ao fechar."""
-        await self.db.close()
-        await self.albion.close()
+        """Cleanup ao fechar o bot"""
+        if self.db:
+            await self.db.close()
         await super().close()
 
 async def main():
-    if not config.DISCORD_TOKEN:
-        logger.critical("DISCORD_TOKEN não encontrado na configuração. Saindo.")
-        return
-
+    """Função principal para iniciar o bot"""
     bot = OVigiaBot()
     
-    async with bot:
-        await bot.start(config.DISCORD_TOKEN)
+    try:
+        await bot.start(Config.DISCORD_TOKEN)
+    except KeyboardInterrupt:
+        logger.info("Bot interrompido pelo usuário")
+    except Exception as e:
+        logger.error(f"Erro fatal: {e}")
+    finally:
+        await bot.close()
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        # Lidar com Ctrl+C graciosamente
-        pass
+    asyncio.run(main())
