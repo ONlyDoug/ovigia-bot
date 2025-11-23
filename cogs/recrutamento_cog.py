@@ -87,6 +87,27 @@ class RecrutamentoCog(commands.Cog):
 
     @app_commands.command(name="registrar", description="Registrar-se na guilda")
     @app_commands.describe(nickname="Seu apelido no Albion Online")
+    async def registrar(self, interaction: discord.Interaction, nickname: str):
+        await interaction.response.defer(ephemeral=True)
+        
+        guild_id = interaction.guild_id
+        config = await self.bot.db.fetchrow_query("SELECT * FROM server_config WHERE guild_id = $1", guild_id)
+        
+        if not config:
+            await interaction.followup.send("Bot não configurado. Peça a um admin para rodar /admin_setup.")
+            return
+
+        # Verificar se o sistema de recrutamento está ativo
+        if not config['recruitment_channel_id'] or not config['approval_channel_id']:
+            await interaction.followup.send("O sistema de recrutamento não está ativado neste servidor (canais não configurados).")
+            return
+
+        # 1. Verificar API
+        player = await self.bot.albion.search_player(nickname)
+        if not player:
+            await interaction.followup.send(f"Jogador '{nickname}' não encontrado na API do Albion.")
+            return
+
         # 2. Verificar requisitos
         pve_fame = player.get('LifetimeStatistics', {}).get('PvE', {}).get('Total', 0)
         pvp_fame = player.get('KillFame', 0)
