@@ -6,14 +6,6 @@ import logging
 logger = logging.getLogger("AdminCog")
 
 class AdminCog(commands.Cog):
-import discord
-from discord.ext import commands
-from discord import app_commands
-import logging
-
-logger = logging.getLogger("AdminCog")
-
-class AdminCog(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
 

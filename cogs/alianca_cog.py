@@ -19,29 +19,10 @@ class AliancaCog(commands.Cog):
             await interaction.followup.send("Servidor não configurado.")
             return
 
-        # Verificar se o sistema de aliança está ativo
-        if not config['alliance_tag'] or not config['ally_role_id']:
-            await interaction.followup.send("O sistema de aliança não está configurado neste servidor.")
-            return
-import discord
-from discord.ext import commands
-from discord import app_commands
-import logging
-
-logger = logging.getLogger("AliancaCog")
-
-class AliancaCog(commands.Cog):
-    def __init__(self, bot):
-        self.bot = bot
-
-    @app_commands.command(name="aplicar_alianca", description="Aplicar para cargo de aliança")
-    @app_commands.describe(nickname="Seu apelido no Albion Online")
-    async def aplicar_alianca(self, interaction: discord.Interaction, nickname: str):
-        await interaction.response.defer(ephemeral=True)
-        
-        config = await self.bot.db.fetchrow_query("SELECT * FROM server_config WHERE guild_id = $1", interaction.guild_id)
-        if not config:
-            await interaction.followup.send("Servidor não configurado.")
+        # Verificar Modo de Operação
+        server_type = config.get('server_type', 'GUILD')
+        if server_type not in ['ALLIANCE', 'HYBRID']:
+            await interaction.followup.send(f"⚠️ Comando desativado. Este servidor está operando em modo **{server_type}** (apenas Guilda).")
             return
 
         # Verificar se o sistema de aliança está ativo
