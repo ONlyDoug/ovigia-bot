@@ -1,54 +1,93 @@
 import asyncpg
+import logging
 import asyncio
+import config
+
+logger = logging.getLogger("Database")
 
 class DatabaseManager:
-    def __init__(self, user, password, host, port, db_name, min_conn=2, max_conn=10):
-        self._user = user
-        self._password = password
-        self._host = host
-        self._port = port
-        self._db_name = db_name
-        self._min_conn = min_conn
-        self._max_conn = max_conn
-        self._pool = None
-        print("DatabaseManager inicializado (com componentes separados).")
+    def __init__(self):
+        self.pool = None
 
     async def connect(self):
-        """Inicializa o pool de conexões com asyncpg."""
+        """Estabelece o pool de conexão com o banco de dados."""
+        if not config.DB_HOST:
+            logger.critical("Configuração do banco de dados ausente. Não é possível conectar.")
+            return
+
         try:
-            self._pool = await asyncpg.create_pool(
-                user=self._user,
-                password=self._password,
-                host=self._host,
-                port=self._port,
-                database=self._db_name,
-                min_size=self._min_conn,
-                max_size=self._max_conn,
-                # --- A CORREÇÃO CRÍTICA ESTÁ AQUI ---
-                statement_cache_size=0 # Desativa o cache que causa o erro no pgbouncer
+            # statement_cache_size=0 é CRÍTICO para Transaction Poolers do Supabase
+            self.pool = await asyncpg.create_pool(
+                user=config.DB_USER,
+                password=config.DB_PASSWORD,
+                host=config.DB_HOST,
+                port=config.DB_PORT,
+                database=config.DB_NAME,
+                statement_cache_size=0,
+                min_size=1,
+                max_size=10
             )
-            print("Pool de conexões (asyncpg) inicializado com sucesso.")
+            logger.info("Conectado ao banco de dados PostgreSQL com sucesso.")
         except Exception as e:
-            print(f"ERRO CRÍTICO ao inicializar o pool de conexões: {e}")
-            raise
+            logger.critical(f"Falha ao conectar ao banco de dados: {e}")
+            raise e
 
     async def close(self):
-        """Fecha o pool de conexões."""
-        if self._pool:
-            await self._pool.close()
-            print("Pool de conexões fechado.")
+        """Fecha o pool de conexão com o banco de dados."""
+        if self.pool:
+            await self.pool.close()
+            logger.info("Conexão com o banco de dados fechada.")
 
-    async def execute_query(self, query, *params, fetch=None):
-        """Executa uma query de forma assíncrona."""
-        if not self._pool:
-            print("Pool de conexões não inicializado. A tentar conectar...")
-            await self.connect() 
-            
-        async with self._pool.acquire() as conn:
-            if fetch == "one":
-                return await conn.fetchrow(query, *params)
-            elif fetch == "all":
-                return await conn.fetch(query, *params)
-            else:
-                await conn.execute(query, *params)
-                return None
+    async def execute_query(self, query, *args):
+        """Executa uma query (INSERT, UPDATE, DELETE) com lógica de reconexão automática."""
+        if not self.pool:
+            await self.connect()
+
+        try:
+            async with self.pool.acquire() as connection:
+                return await connection.execute(query, *args)
+        except (asyncpg.InterfaceError, asyncpg.PostgresConnectionError) as e:
+            logger.warning(f"Conexão com o banco de dados perdida durante execute. Reconectando... Erro: {e}")
+            await self.connect()
+            # Tentar novamente uma vez
+            async with self.pool.acquire() as connection:
+                return await connection.execute(query, *args)
+        except Exception as e:
+            logger.error(f"Erro ao executar query: {query} | Args: {args} | Erro: {e}")
+            raise e
+
+    async def fetch_query(self, query, *args):
+        """Busca resultados (SELECT) com lógica de reconexão automática."""
+        if not self.pool:
+            await self.connect()
+
+        try:
+            async with self.pool.acquire() as connection:
+                return await connection.fetch(query, *args)
+        except (asyncpg.InterfaceError, asyncpg.PostgresConnectionError) as e:
+            logger.warning(f"Conexão com o banco de dados perdida durante fetch. Reconectando... Erro: {e}")
+            await self.connect()
+            # Tentar novamente uma vez
+            async with self.pool.acquire() as connection:
+                return await connection.fetch(query, *args)
+        except Exception as e:
+            logger.error(f"Erro ao buscar query: {query} | Args: {args} | Erro: {e}")
+            raise e
+
+    async def fetchrow_query(self, query, *args):
+        """Busca uma única linha."""
+        if not self.pool:
+            await self.connect()
+
+        try:
+            async with self.pool.acquire() as connection:
+                return await connection.fetchrow(query, *args)
+        except (asyncpg.InterfaceError, asyncpg.PostgresConnectionError) as e:
+            logger.warning(f"Conexão com o banco de dados perdida durante fetchrow. Reconectando... Erro: {e}")
+            await self.connect()
+            # Tentar novamente uma vez
+            async with self.pool.acquire() as connection:
+                return await connection.fetchrow(query, *args)
+        except Exception as e:
+            logger.error(f"Erro ao buscar linha: {query} | Args: {args} | Erro: {e}")
+            raise e

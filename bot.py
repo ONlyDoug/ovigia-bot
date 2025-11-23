@@ -1,73 +1,95 @@
 import discord
 from discord.ext import commands
-import config # O nosso config.py atualizado
-import albion_api
+import logging
 import asyncio
-import os
+import config
 from database import DatabaseManager
+from albion_api import AlbionAPI
+from cogs.recrutamento_cog import ApprovalView
 
-# --- Configuração dos Intents ---
-intents = discord.Intents.default()
-intents.members = True 
-intents.message_content = True 
+# Configuração de Logging
+logger = logging.getLogger("Bot")
 
-class VigiaBot(commands.Bot):
+class OVigiaBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix="!", intents=intents)
+        intents = discord.Intents.default()
+        intents.message_content = True
+        intents.members = True
         
-        self.db_manager = DatabaseManager(
-            user=config.DB_USER,
-            password=config.DB_PASSWORD,
-            host=config.DB_HOST,
-            port=config.DB_PORT,
-            db_name=config.DB_NAME
+        super().__init__(
+            command_prefix="!",
+            intents=intents,
+            help_command=None,
+            case_insensitive=True
         )
-        self.albion_client = albion_api.AlbionAPI()
         
+        self.db = DatabaseManager()
+        self.albion = AlbionAPI()
+
     async def setup_hook(self):
-        """Este 'hook' corre antes do bot ligar."""
+        """Hook de configuração assíncrono para conexão DB, início da API e carregamento de Cogs."""
+        logger.info("Iniciando setup_hook...")
         
-        print("A executar setup_hook...")
+        # 1. Conectar ao Banco de Dados
+        await self.db.connect()
         
-        await self.db_manager.connect()
-        await self.albion_client.connect()
-
-        try:
-            await self.load_extension('cogs.admin_cog')
-            admin_cog = self.get_cog('AdminCog')
-            if admin_cog:
-                print("A inicializar o esquema da base de dados...")
-                await admin_cog.initialize_database_schema()
-            else:
-                raise Exception("Não foi possível obter o AdminCog.")
-        except Exception as e:
-            print(f"ERRO CRÍTICO ao carregar/inicializar o AdminCog: {e}")
-            # Não retornamos, para que possamos ver os erros dos outros cogs se houver
-            
-        # 4. Carregar os outros Cogs (LISTA CORRIGIDA)
-        cogs_to_load = ['cogs.recrutamento_cog', 'cogs.sync_cog', 'cogs.suporte_cog', 'cogs.alianca_cog']
+        # 2. Iniciar Sessão da API do Albion
+        await self.albion.start()
         
-        for cog_name in cogs_to_load:
+        # 3. Carregar Cogs
+        cogs = [
+            'cogs.admin_cog',
+            'cogs.recrutamento_cog',
+            'cogs.alianca_cog',
+            'cogs.sync_cog',
+            'cogs.suporte_cog'
+        ]
+        
+        for cog in cogs:
             try:
-                await self.load_extension(cog_name)
-                print(f"Cog '{cog_name}' carregado com sucesso.")
+                await self.load_extension(cog)
+                logger.info(f"Extensão carregada: {cog}")
             except Exception as e:
-                print(f"ERRO ao carregar o cog '{cog_name}': {e}")
+                logger.error(f"Falha ao carregar extensão {cog}: {e}")
 
-        # 5. Sincronizar Comandos de Barra (Desativado para !sync)
-        # await self.tree.sync()
-        print("Setup_hook concluído. (Use !sync por servidor para sincronizar comandos)")
+        # 4. Criar Tabelas (Garantir que AdminCog seja carregado primeiro ou acessar método diretamente)
+        # Podemos acessar a instância do cog para rodar o método
+        admin_cog = self.get_cog("AdminCog")
+        if admin_cog:
+            await admin_cog.create_tables()
+        else:
+            logger.error("AdminCog não encontrado. Tabelas não criadas.")
+
+        # 5. Registrar Views Persistentes
+        self.add_view(ApprovalView(self))
+        logger.info("Views persistentes registradas.")
+        
+        # Nota: NÃO sincronizamos globalmente aqui para evitar limites de taxa.
+        # Use o comando !sync no servidor.
 
     async def on_ready(self):
-        print(f'Bot ligado como {self.user}')
+        logger.info(f"Logado como {self.user} (ID: {self.user.id})")
+        logger.info("Bot está pronto!")
 
-    async def on_close(self):
-        """Quando o bot desliga, fecha as sessões."""
-        await self.albion_client.close()
-        await self.db_manager.close()
-        print("Bot a desligar. Sessões fechadas.")
+    async def close(self):
+        """Limpeza ao fechar."""
+        await self.db.close()
+        await self.albion.close()
+        await super().close()
 
-# --- Ligar o Bot ---
+async def main():
+    if not config.DISCORD_TOKEN:
+        logger.critical("DISCORD_TOKEN não encontrado na configuração. Saindo.")
+        return
+
+    bot = OVigiaBot()
+    
+    async with bot:
+        await bot.start(config.DISCORD_TOKEN)
+
 if __name__ == "__main__":
-    bot = VigiaBot()
-    bot.run(config.TOKEN)
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        # Lidar com Ctrl+C graciosamente
+        pass

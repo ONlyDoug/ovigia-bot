@@ -1,62 +1,57 @@
 import aiohttp
+import logging
+import config
 
-API_SEARCH_URL = "https://gameinfo.albiononline.com/api/gameinfo/search?q="
-API_PLAYER_INFO_URL = "https://gameinfo.albiononline.com/api/gameinfo/players/"
+logger = logging.getLogger("AlbionAPI")
 
 class AlbionAPI:
     def __init__(self):
-        self._session = None
-        print("AlbionAPI inicializado (ainda não conectado).")
+        self.session = None
 
-    async def connect(self):
-        """Cria a sessão aiohttp dentro do loop de eventos."""
-        if not self._session:
-            self._session = aiohttp.ClientSession()
-            print("Sessão aiohttp (AlbionAPI) criada com sucesso.")
+    async def start(self):
+        self.session = aiohttp.ClientSession()
 
     async def close(self):
-        """Fecha a sessão aiohttp se ela existir."""
-        if self._session:
-            await self._session.close()
-            print("Sessão aiohttp (AlbionAPI) fechada.")
+        if self.session:
+            await self.session.close()
 
     async def search_player(self, player_name):
-        """
-        Procura um jogador pelo nome e retorna o ID se encontrar uma correspondência exata.
-        """
-        if not self._session:
-            raise Exception("AlbionAPI não conectado. Chame connect() primeiro.")
+        """Busca por um jogador pelo nome."""
+        if not self.session:
+            await self.start()
         
+        url = f"{config.ALBION_API_URL}/search?q={player_name}"
         try:
-            async with self._session.get(f"{API_SEARCH_URL}{player_name}") as resp:
-                if resp.status != 200:
-                    print(f"API Search falhou: {resp.status}")
+            async with self.session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    # Filtrar por jogadores
+                    players = data.get("players", [])
+                    # Preferência por correspondência exata ou retornar o primeiro
+                    for p in players:
+                        if p['Name'].lower() == player_name.lower():
+                            return p
+                    return players[0] if players else None
+                else:
+                    logger.error(f"Erro na API do Albion (Busca): {response.status}")
                     return None
-                data = await resp.json()
-                for player in data.get('players', []):
-                    if player.get('Name').lower() == player_name.lower():
-                        return player.get('Id')
-                return None
         except Exception as e:
-            print(f"Erro ao procurar jogador: {e}")
+            logger.error(f"Exceção em search_player: {e}")
             return None
 
     async def get_player_info(self, player_id):
-        """
-        Busca a informação completa de um jogador (incluindo bio e guilda) pelo ID.
-        """
-        if not self._session:
-            raise Exception("AlbionAPI não conectado. Chame connect() primeiro.")
-            
-        if not player_id:
-            return None
-            
+        """Obtém informações detalhadas de um jogador."""
+        if not self.session:
+            await self.start()
+
+        url = f"{config.ALBION_API_URL}/players/{player_id}"
         try:
-            async with self._session.get(f"{API_PLAYER_INFO_URL}{player_id}") as resp:
-                if resp.status != 200:
-                    print(f"API Info falhou: {resp.status}")
+            async with self.session.get(url) as response:
+                if response.status == 200:
+                    return await response.json()
+                else:
+                    logger.error(f"Erro na API do Albion (Obter Info): {response.status}")
                     return None
-                return await resp.json()
         except Exception as e:
-            print(f"Erro ao obter info do jogador: {e}")
+            logger.error(f"Exceção em get_player_info: {e}")
             return None
