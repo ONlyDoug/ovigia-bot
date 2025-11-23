@@ -1,28 +1,32 @@
 import asyncpg
 import logging
-import asyncio
-import config
+from config import Config
 
 logger = logging.getLogger("Database")
 
 class DatabaseManager:
-    def __init__(self):
+    def __init__(self, host, port, database, user, password):
+        self.host = host
+        self.port = port
+        self.database = database
+        self.user = user
+        self.password = password
         self.pool = None
 
     async def connect(self):
         """Estabelece o pool de conexão com o banco de dados."""
-        if not config.DB_HOST:
+        if not self.host:
             logger.critical("Configuração do banco de dados ausente. Não é possível conectar.")
             return
 
         try:
             # statement_cache_size=0 é CRÍTICO para Transaction Poolers do Supabase
             self.pool = await asyncpg.create_pool(
-                user=config.DB_USER,
-                password=config.DB_PASSWORD,
-                host=config.DB_HOST,
-                port=config.DB_PORT,
-                database=config.DB_NAME,
+                user=self.user,
+                password=self.password,
+                host=self.host,
+                port=self.port,
+                database=self.database,
                 statement_cache_size=0,
                 min_size=1,
                 max_size=10

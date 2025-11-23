@@ -1,6 +1,6 @@
 import aiohttp
 import logging
-import config
+from config import Config
 
 logger = logging.getLogger("AlbionAPI")
 
@@ -20,7 +20,7 @@ class AlbionAPI:
         if not self.session:
             await self.start()
         
-        url = f"{config.ALBION_API_URL}/search?q={player_name}"
+        url = f"{Config.ALBION_API_URL}/search?q={player_name}"
         try:
             async with self.session.get(url) as response:
                 if response.status == 200:
@@ -44,7 +44,7 @@ class AlbionAPI:
         if not self.session:
             await self.start()
 
-        url = f"{config.ALBION_API_URL}/players/{player_id}"
+        url = f"{Config.ALBION_API_URL}/players/{player_id}"
         try:
             async with self.session.get(url) as response:
                 if response.status == 200:
