@@ -49,12 +49,17 @@ class AliancaCog(commands.Cog):
                 if ally_role: await interaction.user.add_roles(ally_role)
                 if recruit_role: await interaction.user.remove_roles(recruit_role)
                 
-                # Atualizar Nick
-                guild_name = full_player.get('GuildName', '')
-                new_nick = f"[{guild_name}] {player['Name']}"
+                # Atualizar Nick: [GuildName] Nickname (Padrão para aliança)
+                guild_name = full_player.get('GuildName', 'Guild')
+                # Tentar pegar abreviação se possível (não fornecido pela API diretamente, usando nome completo ou truncado)
+                # Para aliança, o usuário pediu [TAG] mas a API só dá o nome completo. 
+                # Vou usar o nome da guilda como "TAG" por enquanto, ou abreviar se for muito longo.
+                tag = guild_name
+                
+                new_nick = f"[{tag}] {player['Name']}"
                 await interaction.user.edit(nick=new_nick[:32])
                 
-                await interaction.followup.send(f"✅ Verificado! Bem-vindo à aliança **{server_ally}**.")
+                await interaction.followup.send(f"✅ Verificado! Bem-vindo à aliança **{server_ally}**. Nick alterado para `{new_nick}`.")
                 
             except discord.Forbidden:
                 await interaction.followup.send("⚠️ Verificado, mas sem permissão para alterar cargos/nick.")

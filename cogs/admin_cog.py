@@ -55,29 +55,89 @@ class AdminCog(commands.Cog):
         except Exception:
             pass
 
-    @commands.command(name="sync")
-    @commands.has_permissions(administrator=True)
-    async def sync_commands(self, ctx):
-        """
-        Sincroniza os comandos de barra para o servidor atual.
-        COPIA os comandos globais para o servidor para aparecerem instantaneamente.
-        """
-        msg = await ctx.send("⏳ Sincronizando comandos (Copiando Globais -> Guilda)...")
-        try:
-            # Passo CRÍTICO: Copiar comandos globais para este servidor específico
-            # Isso faz com que eles apareçam instantaneamente, em vez de demorar 1 hora
-            self.bot.tree.copy_global_to(guild=ctx.guild)
+    @app_commands.command(name="auto_setup", description="🚀 Configuração Automática (Cria canais e cargos)")
+    @app_commands.describe(
+        mode="Modo de operação do bot",
+        guild_tag="Tag da sua Guilda (Ex: VEX)",
+        alliance_tag="Tag da Aliança (Ex: ALLY)"
+    )
+    @app_commands.choices(mode=[
+        app_commands.Choice(name="Guilda (Recrutamento)", value="GUILD"),
+        app_commands.Choice(name="Aliança (Gestão de Aliados)", value="ALLIANCE"),
+        app_commands.Choice(name="Híbrido (Ambos)", value="HYBRID")
+    ])
+    @app_commands.default_permissions(administrator=True)
+    async def auto_setup(self, interaction: discord.Interaction, mode: app_commands.Choice[str], guild_tag: str = None, alliance_tag: str = None):
+        await interaction.response.defer()
+        guild = interaction.guild
+        
+        # 1. Criar Categoria
+        category = discord.utils.get(guild.categories, name="🛡️ Sistema O Vigia")
+        if not category:
+            category = await guild.create_category("🛡️ Sistema O Vigia")
             
-            # Sincronizar
-            synced = await self.bot.tree.sync(guild=ctx.guild)
+        # 2. Criar Canais
+        rec_channel = discord.utils.get(guild.text_channels, name="📝-registros", category=category)
+        if not rec_channel:
+            rec_channel = await guild.create_text_channel("📝-registros", category=category)
             
-            await msg.edit(content=f"✅ **Sucesso!** {len(synced)} comandos sincronizados para este servidor.\n\nComandos disponíveis:\n" + "\n".join([f"`/{cmd.name}`" for cmd in synced]))
-            logger.info(f"Comandos sincronizados para {ctx.guild.name}: {len(synced)}")
-        except Exception as e:
-            await msg.edit(content=f"❌ Falha ao sincronizar: {e}")
-            logger.error(f"Erro de sync: {e}")
+        app_channel = discord.utils.get(guild.text_channels, name="✅-aprovação", category=category)
+        if not app_channel:
+            app_channel = await guild.create_text_channel("✅-aprovação", category=category)
+            
+        # 3. Criar Cargos
+        member_role = discord.utils.get(guild.roles, name="Membro")
+        if not member_role:
+            member_role = await guild.create_role(name="Membro", color=discord.Color.blue(), hoist=True)
+            
+        recruit_role = discord.utils.get(guild.roles, name="Recruta")
+        if not recruit_role:
+            recruit_role = await guild.create_role(name="Recruta", color=discord.Color.orange(), hoist=True)
+            
+        ally_role = discord.utils.get(guild.roles, name="Aliado")
+        if not ally_role:
+            ally_role = await guild.create_role(name="Aliado", color=discord.Color.green(), hoist=True)
+            
+        # 4. Salvar no Banco
+        query = """
+        INSERT INTO server_config (
+            guild_id, recruitment_channel_id, approval_channel_id, 
+            member_role_id, recruit_role_id, ally_role_id, 
+            guild_tag, alliance_tag, server_type
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (guild_id) DO UPDATE SET
+            recruitment_channel_id = $2,
+            approval_channel_id = $3,
+            member_role_id = $4,
+            recruit_role_id = $5,
+            ally_role_id = $6,
+            guild_tag = COALESCE($7, server_config.guild_tag),
+            alliance_tag = COALESCE($8, server_config.alliance_tag),
+            server_type = $9;
+        """
+        
+        await self.bot.db.execute_query(query, 
+            guild.id, rec_channel.id, app_channel.id, 
+            member_role.id, recruit_role.id, ally_role.id, 
+            guild_tag, alliance_tag, mode.value
+        )
+        
+        msg = f"""
+✅ **Configuração Automática Concluída!**
 
-    @app_commands.command(name="admin_setup", description="Configurar o bot (Modo e Canais)")
+**Modo:** {mode.name}
+**Canais Criados:** {rec_channel.mention}, {app_channel.mention}
+**Cargos Criados:** {member_role.mention}, {recruit_role.mention}, {ally_role.mention}
+
+**Tags Configuradas:**
+Guilda: `{guild_tag or 'Não definida'}`
+Aliança: `{alliance_tag or 'Não definida'}`
+
+O bot está pronto para uso!
+"""
+        await interaction.followup.send(msg)
+
+    @app_commands.command(name="admin_setup", description="Configuração Manual (Avançado)")
     @app_commands.describe(
         mode="Modo de operação do bot",
         recruitment_channel="Canal de logs (Modo Guilda)",
@@ -135,7 +195,7 @@ class AdminCog(commands.Cog):
                 guild_tag, alliance_tag, mode.value
             )
             
-            msg = f"✅ **Configuração Salva!**\nModo: `{mode.name}`"
+            msg = f"✅ **Configuração Manual Salva!**\nModo: `{mode.name}`"
             await interaction.followup.send(msg)
             
         except Exception as e:

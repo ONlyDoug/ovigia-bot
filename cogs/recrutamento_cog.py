@@ -42,19 +42,19 @@ class ApprovalView(discord.ui.View):
                 if recruit_role: await member.remove_roles(recruit_role)
                 if member_role: await member.add_roles(member_role)
                 
-                # Atualizar Nick
+                # Atualizar Nick: [TAG] Nickname
                 tag = config['guild_tag'] or "GUILD"
                 new_nick = f"[{tag}] {albion_nick}"
                 await member.edit(nick=new_nick[:32])
                 
-                await interaction.followup.send(f"✅ {member.mention} aprovado com sucesso!")
+                await interaction.followup.send(f"✅ {member.mention} aprovado com sucesso! Nick alterado para `{new_nick}`.")
                 
                 # Desabilitar view
                 for item in self.children: item.disabled = True
                 await interaction.message.edit(view=self)
                 
             except discord.Forbidden:
-                await interaction.followup.send("❌ Sem permissão para alterar cargos/nick.", ephemeral=True)
+                await interaction.followup.send("❌ Sem permissão para alterar cargos/nick. Verifique a hierarquia de cargos.", ephemeral=True)
 
         except Exception as e:
             logger.error(f"Erro na aprovação: {e}")
@@ -81,7 +81,7 @@ class RecrutamentoCog(commands.Cog):
         )
         
         if not config:
-            await interaction.followup.send("❌ Bot não configurado. Use `/admin_setup`.")
+            await interaction.followup.send("❌ Bot não configurado. Use `/auto_setup`.")
             return
             
         if config['server_type'] not in ['GUILD', 'HYBRID']:
