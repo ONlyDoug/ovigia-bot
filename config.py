@@ -6,38 +6,48 @@ from dotenv import load_dotenv
 # Carregar variáveis de ambiente
 load_dotenv()
 
-# Configuração de Logging
+# Configuração de Logging Centralizada
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler("bot.log"),
         logging.StreamHandler()
     ]
 )
 logger = logging.getLogger("Config")
 
 class Config:
-    # Token do Bot
+    """Centraliza e valida as configurações do bot."""
+    
     DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-    
-    # Configuração do Banco de Dados
     DATABASE_URL = os.getenv("DATABASE_URL")
+    ALBION_API_URL = "https://gameinfo.albiononline.com/api/gameinfo"
     
+    # Variáveis de conexão DB (preenchidas via parse)
     DB_USER = None
     DB_PASSWORD = None
     DB_HOST = None
     DB_PORT = None
     DB_NAME = None
-    
-    # Configuração da API do Albion
-    ALBION_API_URL = "https://gameinfo.albiononline.com/api/gameinfo"
 
     @classmethod
-    def parse_database_url(cls):
-        if cls.DATABASE_URL:
-            # Regex para analisar a string de conexão
-            # Formato: postgresql://user:password@host:port/dbname
+    def validate(cls):
+        """Valida se as configurações críticas estão presentes."""
+        if not cls.DISCORD_TOKEN:
+            logger.critical("DISCORD_TOKEN não encontrado nas variáveis de ambiente!")
+            return False
+        if not cls.DATABASE_URL:
+            logger.critical("DATABASE_URL não encontrada nas variáveis de ambiente!")
+            return False
+        
+        # Parse da URL do Banco
+        return cls._parse_database_url()
+
+    @classmethod
+    def _parse_database_url(cls):
+        """Analisa a string de conexão do PostgreSQL."""
+        try:
+            # Regex para postgresql://user:pass@host:port/dbname
             pattern = r"(?:postgresql|postgres)://([^:]+):([^@]+)@([^:/]+)(?::(\d+))?/([^?]+)"
             match = re.search(pattern, cls.DATABASE_URL)
             
@@ -47,11 +57,15 @@ class Config:
                 cls.DB_HOST = match.group(3)
                 cls.DB_PORT = match.group(4) or "5432"
                 cls.DB_NAME = match.group(5)
-                logger.info(f"Configuração do banco de dados analisada com sucesso: Host={cls.DB_HOST}, DB={cls.DB_NAME}")
+                logger.info(f"Configuração DB carregada: Host={cls.DB_HOST}, DB={cls.DB_NAME}")
+                return True
             else:
-                logger.error("Não foi possível analisar DATABASE_URL. Certifique-se de que segue o formato postgresql://user:pass@host:port/dbname.")
-        else:
-            logger.error("DATABASE_URL não encontrada nas variáveis de ambiente.")
+                logger.error("Formato de DATABASE_URL inválido.")
+                return False
+        except Exception as e:
+            logger.error(f"Erro ao analisar DATABASE_URL: {e}")
+            return False
 
-# Executar análise ao importar
-Config.parse_database_url()
+# Executar validação ao importar
+if not Config.validate():
+    logger.warning("Configuração inicial falhou ou está incompleta.")
