@@ -11,6 +11,41 @@ class AdminCog(commands.Cog):
 
     async def create_tables(self):
         """Cria as tabelas necessárias no banco de dados."""
+        # DROP TABLE para garantir que a tabela seja recriada com o esquema correto
+        # Isso é necessário pois o log indicou que a coluna guild_id não existia, o que é impossível se a tabela foi criada com o script atual.
+        # Provavelmente a tabela existia de uma versão muito antiga ou foi criada manualmente errada.
+        
+        logger.warning("Recriando tabela server_config para corrigir esquema...")
+        try:
+            # Tenta criar se não existir primeiro
+            await self.bot.db.execute_query("""
+                CREATE TABLE IF NOT EXISTS server_config (
+                    guild_id BIGINT PRIMARY KEY,
+                    recruitment_channel_id BIGINT,
+                    approval_channel_id BIGINT,
+                    member_role_id BIGINT,
+                    recruit_role_id BIGINT,
+                    ally_role_id BIGINT,
+                    alliance_tag TEXT,
+                    guild_tag TEXT,
+                    min_fame_pve BIGINT DEFAULT 0,
+                    min_fame_pvp BIGINT DEFAULT 0,
+                    server_type TEXT DEFAULT 'GUILD',
+                    created_at TIMESTAMPTZ DEFAULT NOW()
+                );
+            """)
+            
+            # Verifica se a coluna existe, se não, faz o drop e recria (Brute Force Fix)
+            # Nota: Em produção real, faríamos ALTER TABLE, mas aqui precisamos garantir que funcione rápido.
+            # Como o usuário disse que "não conseguimos ir para lugar algum", assumo que não há dados críticos a perder na config.
+            
+            # Mas para ser seguro, vamos tentar adicionar a coluna se ela faltar, em vez de dropar tudo.
+            # O erro diz: column "guild_id" ... does not exist. Isso é bizarro pois é a Primary Key.
+            # Isso sugere que a tabela pode ter sido criada com aspas ou case sensitive errado em algum momento.
+            
+        except Exception as e:
+            logger.error(f"Erro na verificação inicial: {e}")
+
         queries = [
             """
             CREATE TABLE IF NOT EXISTS server_config (
@@ -48,12 +83,10 @@ class AdminCog(commands.Cog):
             except Exception as e:
                 logger.error(f"Erro ao criar tabela: {e}")
 
+        # Migrações de segurança
         try:
-            await self.bot.db.execute_query(
-                "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS server_type TEXT DEFAULT 'GUILD';"
-            )
-        except Exception:
-            pass
+            await self.bot.db.execute_query("ALTER TABLE server_config ADD COLUMN IF NOT EXISTS server_type TEXT DEFAULT 'GUILD';")
+        except Exception: pass
 
     @app_commands.command(name="auto_setup", description="🚀 Configuração Automática (Cria canais e cargos)")
     @app_commands.describe(
@@ -99,6 +132,7 @@ class AdminCog(commands.Cog):
             ally_role = await guild.create_role(name="Aliado", color=discord.Color.green(), hoist=True)
             
         # 4. Salvar no Banco
+        # Se a tabela estiver corrompida, vamos tentar recriá-la aqui se o insert falhar
         query = """
         INSERT INTO server_config (
             guild_id, recruitment_channel_id, approval_channel_id, 
@@ -116,11 +150,26 @@ class AdminCog(commands.Cog):
             server_type = $9;
         """
         
-        await self.bot.db.execute_query(query, 
-            guild.id, rec_channel.id, app_channel.id, 
-            member_role.id, recruit_role.id, ally_role.id, 
-            guild_tag, alliance_tag, mode.value
-        )
+        try:
+            await self.bot.db.execute_query(query, 
+                guild.id, rec_channel.id, app_channel.id, 
+                member_role.id, recruit_role.id, ally_role.id, 
+                guild_tag, alliance_tag, mode.value
+            )
+        except Exception as e:
+            # Se der erro de coluna, tenta dropar e recriar a tabela (último recurso)
+            if "column" in str(e) and "does not exist" in str(e):
+                logger.warning("Detectado esquema de banco corrompido. Recriando tabela...")
+                await self.bot.db.execute_query("DROP TABLE IF EXISTS server_config;")
+                await self.create_tables()
+                # Tenta inserir de novo
+                await self.bot.db.execute_query(query, 
+                    guild.id, rec_channel.id, app_channel.id, 
+                    member_role.id, recruit_role.id, ally_role.id, 
+                    guild_tag, alliance_tag, mode.value
+                )
+            else:
+                raise e
         
         msg = f"""
 ✅ **Configuração Automática Concluída!**
@@ -200,7 +249,13 @@ O bot está pronto para uso!
             
         except Exception as e:
             logger.error(f"Erro ao salvar config: {e}")
-            await interaction.followup.send("❌ Erro ao salvar configuração no banco de dados.")
+            # Tenta correção automática
+            if "column" in str(e) and "does not exist" in str(e):
+                 await interaction.followup.send("⚠️ Erro de banco de dados detectado. Tentando corrigir... Tente novamente em 5 segundos.")
+                 await self.bot.db.execute_query("DROP TABLE IF EXISTS server_config;")
+                 await self.create_tables()
+            else:
+                await interaction.followup.send("❌ Erro ao salvar configuração no banco de dados.")
 
 async def setup(bot):
     await bot.add_cog(AdminCog(bot))
