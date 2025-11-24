@@ -48,22 +48,30 @@ class AdminCog(commands.Cog):
             except Exception as e:
                 logger.error(f"Erro ao criar tabela: {e}")
 
-        # Migração de segurança para garantir coluna server_type
         try:
             await self.bot.db.execute_query(
                 "ALTER TABLE server_config ADD COLUMN IF NOT EXISTS server_type TEXT DEFAULT 'GUILD';"
             )
         except Exception:
-            pass # Coluna já existe ou erro ignorável
+            pass
 
     @commands.command(name="sync")
     @commands.has_permissions(administrator=True)
     async def sync_commands(self, ctx):
-        """Sincroniza os comandos de barra para o servidor atual."""
-        msg = await ctx.send("⏳ Sincronizando comandos...")
+        """
+        Sincroniza os comandos de barra para o servidor atual.
+        COPIA os comandos globais para o servidor para aparecerem instantaneamente.
+        """
+        msg = await ctx.send("⏳ Sincronizando comandos (Copiando Globais -> Guilda)...")
         try:
+            # Passo CRÍTICO: Copiar comandos globais para este servidor específico
+            # Isso faz com que eles apareçam instantaneamente, em vez de demorar 1 hora
+            self.bot.tree.copy_global_to(guild=ctx.guild)
+            
+            # Sincronizar
             synced = await self.bot.tree.sync(guild=ctx.guild)
-            await msg.edit(content=f"✅ Sincronizado {len(synced)} comandos para este servidor.")
+            
+            await msg.edit(content=f"✅ **Sucesso!** {len(synced)} comandos sincronizados para este servidor.\n\nComandos disponíveis:\n" + "\n".join([f"`/{cmd.name}`" for cmd in synced]))
             logger.info(f"Comandos sincronizados para {ctx.guild.name}: {len(synced)}")
         except Exception as e:
             await msg.edit(content=f"❌ Falha ao sincronizar: {e}")
@@ -98,7 +106,6 @@ class AdminCog(commands.Cog):
         
         await interaction.response.defer(ephemeral=True)
         
-        # Preparar dados
         rec_id = recruitment_channel.id if recruitment_channel else None
         app_id = approval_channel.id if approval_channel else None
         mem_id = member_role.id if member_role else None

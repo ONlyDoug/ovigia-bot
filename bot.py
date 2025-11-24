@@ -57,7 +57,28 @@ class OVigiaBot(commands.Bot):
 
     async def on_ready(self):
         logger.info(f"Bot Online: {self.user} (ID: {self.user.id})")
-        logger.info("Aguardando comandos...")
+        logger.info(f"Conectado a {len(self.guilds)} servidores.")
+        
+        # FORÇAR SINCRONIZAÇÃO DE COMANDOS
+        logger.info("Iniciando sincronização automática de comandos...")
+        try:
+            # Sincronizar globalmente (pode demorar)
+            # await self.tree.sync() 
+            
+            # Sincronizar para cada guilda (imediato)
+            for guild in self.guilds:
+                logger.info(f"Sincronizando para guilda: {guild.name} ({guild.id})")
+                try:
+                    self.tree.copy_global_to(guild=guild)
+                    synced = await self.tree.sync(guild=guild)
+                    logger.info(f"✅ Sincronizado {len(synced)} comandos para {guild.name}")
+                except Exception as e:
+                    logger.error(f"❌ Falha ao sincronizar para {guild.name}: {e}")
+                    
+            logger.info("Sincronização automática concluída!")
+            
+        except Exception as e:
+            logger.error(f"Erro fatal na sincronização: {e}")
 
     async def close(self):
         """Limpeza ao desligar."""
